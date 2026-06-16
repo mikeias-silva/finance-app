@@ -1,0 +1,90 @@
+services:
+
+  # ─────────────────────────────────────────────
+  # Nginx — proxy reverso, serve assets estáticos
+  # ─────────────────────────────────────────────
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: finance_nginx
+    restart: unless-stopped
+    ports:
+      - "${APP_PORT:-8080}:80"
+    volumes:
+      - ./:/var/www/html:ro
+      - ./docker/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      php:
+        condition: service_healthy
+    networks:
+      - finance_net
+
+  # ─────────────────────────────────────────────
+  # PHP-FPM 8.5 — processa o Laravel
+  # ─────────────────────────────────────────────
+  php:
+    build:
+      context: ./docker/php
+      dockerfile: Dockerfile
+    container_name: finance_php
+    restart: unless-stopped
+    volumes:
+      - ./:/var/www/html
+      - ./docker/php/php.ini:/usr/local/etc/php/conf.d/99-custom.ini:ro
+    environment:
+      APP_ENV:       ${APP_ENV:-local}
+      APP_KEY:       ${APP_KEY:-}
+      APP_DEBUG:     ${APP_DEBUG:-true}
+      APP_URL:       ${APP_URL:-http://localhost:8080}
+      DB_CONNECTION: pgsql
+      DB_HOST:       postgres
+      DB_PORT:       5432
+      DB_DATABASE:   ${DB_DATABASE:-finance}
+      DB_USERNAME:   ${DB_USERNAME:-finance}
+      DB_PASSWORD:   ${DB_PASSWORD:-secret_change_me}
+      CACHE_DRIVER:  file
+      SESSION_DRIVER: file
+      QUEUE_CONNECTION: sync
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "php-fpm -t 2>&1 | grep -q 'test is successful'"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - finance_net
+
+  # ─────────────────────────────────────────────
+  # PostgreSQL 18
+  # ATENÇÃO: no PG18 o PGDATA mudou para path versionado
+  # ─────────────────────────────────────────────
+  postgres:
+    image: postgres:18-alpine
+    container_name: finance_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB:       ${DB_DATABASE:-finance}
+      POSTGRES_USER:     ${DB_USERNAME:-finance}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-secret}
+      # PG18 mudou PGDATA — declarar explicitamente evita confusão
+      PGDATA: /var/lib/postgresql/18/docker
+    volumes:
+      - postgres_data:/var/lib/postgresql
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports:
+      - "${DB_PORT_EXPOSE:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-finance} -d ${DB_DATABASE:-finance}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - finance_net
+
+volumes:
+  postgres_data:
+
+networks:
+  finance_net:
+    driver: bridge
