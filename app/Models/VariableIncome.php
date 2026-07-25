@@ -7,7 +7,7 @@ use Illuminate\Database\Eloquent\Model;
 class VariableIncome extends Model
 {
     protected $table = 'variable_incomes';
-    protected $fillable = ['description',
+    protected $fillable = ['identifier', 'description',
     'amount',
     'received_at'];
 }

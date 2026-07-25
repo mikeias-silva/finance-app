@@ -2,64 +2,97 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\CreditCard;
 use App\Models\CreditCardPurchase;
+use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\View\View;
 
 class CreditCardPurchaseController extends Controller
 {
-    /**
-     * Display a listing of the resource.
-     */
-    public function index()
+    public function index(Request $request): View
     {
-        //
+        $cards = CreditCard::query()
+            ->where('is_active', true)
+            ->orderBy('name')
+            ->get();
+
+        $purchases = CreditCardPurchase::query()
+            ->with('creditCard')
+            ->when($request->filled('card'), function ($query) use ($request) {
+                $query->where('credit_card_id', $request->integer('card'));
+            })
+            ->orderByDesc('purchased_at')
+            ->orderByDesc('id')
+            ->paginate(20)
+            ->withQueryString();
+
+        return view('purchases.index', compact('purchases', 'cards'));
     }
 
-    /**
-     * Show the form for creating a new resource.
-     */
-    public function create()
+    public function create(): View
     {
-        //
+        $cards = CreditCard::query()
+            ->where('is_active', true)
+            ->orderBy('name')
+            ->get();
+
+        return view('purchases.create', compact('cards'));
     }
 
-    /**
-     * Store a newly created resource in storage.
-     */
-    public function store(Request $request)
+    public function store(Request $request): RedirectResponse
     {
-        //
+        CreditCardPurchase::create($this->validateData($request));
+
+        return redirect()
+            ->route('purchases.index')
+            ->with('success', 'Compra parcelada cadastrada com sucesso.');
     }
 
-    /**
-     * Display the specified resource.
-     */
-    public function show(CreditCardPurchase $creditCardPurchase)
+    public function show(CreditCardPurchase $purchase): RedirectResponse
     {
-        //
+        return redirect()->route('purchases.edit', $purchase);
     }
 
-    /**
-     * Show the form for editing the specified resource.
-     */
-    public function edit(CreditCardPurchase $creditCardPurchase)
+    public function edit(CreditCardPurchase $purchase): View
     {
-        //
+        $cards = CreditCard::query()
+            ->where('is_active', true)
+            ->orderBy('name')
+            ->get();
+
+        return view('purchases.edit', [
+            'purchase' => $purchase,
+            'cards' => $cards,
+        ]);
     }
 
-    /**
-     * Update the specified resource in storage.
-     */
-    public function update(Request $request, CreditCardPurchase $creditCardPurchase)
+    public function update(Request $request, CreditCardPurchase $purchase): RedirectResponse
     {
-        //
+        $purchase->update($this->validateData($request));
+
+        return redirect()
+            ->route('purchases.index')
+            ->with('success', 'Compra parcelada atualizada com sucesso.');
     }
 
-    /**
-     * Remove the specified resource from storage.
-     */
-    public function destroy(CreditCardPurchase $creditCardPurchase)
+    public function destroy(CreditCardPurchase $purchase): RedirectResponse
     {
-        //
+        $purchase->delete();
+
+        return redirect()
+            ->route('purchases.index')
+            ->with('success', 'Compra parcelada excluída com sucesso.');
+    }
+
+    private function validateData(Request $request): array
+    {
+        return $request->validate([
+            'credit_card_id' => ['required', 'exists:credit_cards,id'],
+            'description' => ['required', 'string'],
+            'total_amount' => ['required', 'numeric', 'min:0.01'],
+            'installments' => ['required', 'integer', 'min:1', 'max:60'],
+            'purchased_at' => ['required', 'date'],
+        ]);
     }
 }

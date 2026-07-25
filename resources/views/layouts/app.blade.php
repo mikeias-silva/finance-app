@@ -200,7 +200,7 @@
         }
         .stat-card .stat-value {
             font-size: 26px;
-            font-weight: 600;
+            /*font-weight: 600;*/
             letter-spacing: -1px;
             font-family: 'DM Mono', monospace;
             line-height: 1;
@@ -340,13 +340,17 @@
 
     <div class="sidebar-section flex-grow-1 overflow-auto">
         <div class="sidebar-label">Visão geral</div>
-        <a href="#"
+        <a href="{{ route('dashboard') }}"
            class="sidebar-link {{ request()->routeIs('dashboard') ? 'active' : '' }}">
             <i class="bi bi-grid-1x2"></i> Dashboard
         </a>
+        <a href="{{ route('investments.index') }}"
+           class="sidebar-link {{ request()->routeIs('investments.*') ? 'active' : '' }}">
+            <i class="bi bi-piggy-bank"></i> Investimentos
+        </a>
 
         <div class="sidebar-label mt-3">Lançamentos</div>
-        <a href=""
+        <a href="{{ route('purchases.index') }}"
            class="sidebar-link {{ request()->routeIs('purchases.*') ? 'active' : '' }}">
             <i class="bi bi-credit-card"></i> Compras parceladas
         </a>
@@ -357,6 +361,10 @@
         <a href="{{ route('variable-incomes.index') }}"
            class="sidebar-link {{ request()->routeIs('variable-incomes.*') ? 'active' : '' }}">
             <i class="bi bi-graph-up-arrow"></i> Rendimentos variáveis
+        </a>
+        <a href="{{ route('variable-expenses.index') }}"
+           class="sidebar-link {{ request()->routeIs('variable-expenses.*') ? 'active' : '' }}">
+            <i class="bi bi-arrow-left-right"></i> Movimentações de conta
         </a>
 
         <div class="sidebar-label mt-3">Configurações</div>

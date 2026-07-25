@@ -3,63 +3,83 @@
 namespace App\Http\Controllers;
 
 use App\Models\VariableIncome;
+use App\Services\BillingPeriod;
+use Carbon\Carbon;
+use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\View\View;
 
 class VariableIncomeController extends Controller
 {
-    /**
-     * Display a listing of the resource.
-     */
-    public function index()
+    public function index(): View
     {
-        //
+        $period = BillingPeriod::for(now());
+
+        $incomes = VariableIncome::query()
+            ->orderByDesc('received_at')
+            ->orderByDesc('id')
+            ->paginate(20);
+
+        $currentMonthTotal = VariableIncome::query()
+            ->whereBetween('received_at', [
+                $period['start']->toDateString(),
+                $period['end']->toDateString(),
+            ])
+            ->sum('amount');
+
+        $totalAmount = VariableIncome::query()->sum('amount');
+
+        return view('variable-incomes.index', compact('incomes', 'currentMonthTotal', 'totalAmount'));
     }
 
-    /**
-     * Show the form for creating a new resource.
-     */
-    public function create()
+    public function create(): View
     {
-        //
+        return view('variable-incomes.create');
     }
 
-    /**
-     * Store a newly created resource in storage.
-     */
-    public function store(Request $request)
+    public function store(Request $request): RedirectResponse
     {
-        //
+        VariableIncome::create($this->validateData($request));
+
+        return redirect()
+            ->route('variable-incomes.index')
+            ->with('success', 'Rendimento variável cadastrado com sucesso.');
     }
 
-    /**
-     * Display the specified resource.
-     */
-    public function show(VariableIncome $variableIncome)
+    public function show(VariableIncome $variableIncome): RedirectResponse
     {
-        //
+        return redirect()->route('variable-incomes.edit', $variableIncome);
     }
 
-    /**
-     * Show the form for editing the specified resource.
-     */
-    public function edit(VariableIncome $variableIncome)
+    public function edit(VariableIncome $variableIncome): View
     {
-        //
+        return view('variable-incomes.edit', compact('variableIncome'));
     }
 
-    /**
-     * Update the specified resource in storage.
-     */
-    public function update(Request $request, VariableIncome $variableIncome)
+    public function update(Request $request, VariableIncome $variableIncome): RedirectResponse
     {
-        //
+        $variableIncome->update($this->validateData($request));
+
+        return redirect()
+            ->route('variable-incomes.index')
+            ->with('success', 'Rendimento variável atualizado com sucesso.');
     }
 
-    /**
-     * Remove the specified resource from storage.
-     */
-    public function destroy(VariableIncome $variableIncome)
+    public function destroy(VariableIncome $variableIncome): RedirectResponse
     {
-        //
+        $variableIncome->delete();
+
+        return redirect()
+            ->route('variable-incomes.index')
+            ->with('success', 'Rendimento variável excluído com sucesso.');
+    }
+
+    private function validateData(Request $request): array
+    {
+        return $request->validate([
+            'description' => ['required', 'string'],
+            'amount' => ['required', 'numeric', 'min:0.01'],
+            'received_at' => ['required', 'date'],
+        ]);
     }
 }

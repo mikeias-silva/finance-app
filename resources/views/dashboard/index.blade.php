@@ -45,7 +45,7 @@
 {{-- Cabeçalho --}}
 <div class="d-flex align-items-center justify-content-between mb-4">
     <div>
-        <h1 class="h5 fw-semibold mb-0">Projeção financeira</h1>
+        <h1 class="h5  mb-0">Projeção financeira</h1>
         <p class="text-muted small mb-0 mt-1">
             Próximos {{ $months }} meses a partir de {{ now()->translatedFormat('F Y') }}
         </p>
@@ -81,7 +81,7 @@
             <div class="stat-icon"><i class="bi bi-arrow-down-circle"></i></div>
             <div class="stat-label">Gastos este mês</div>
             <div class="stat-value">
-                R${{ number_format($current['card_expenses']->sum('amount') + $current['fixed_expenses']->sum('amount'), 0, ',', '.') }}
+                R${{ number_format($current['card_expenses']->sum('amount') + $current['fixed_expenses']->sum('amount') + $current['variable_expenses']->sum('amount'), 0, ',', '.') }}
             </div>
         </div>
     </div>
@@ -120,27 +120,54 @@
             <div class="card-body p-0">
                 @php
                     $maxExpense = $projection->max(fn($m) =>
-                        $m['card_expenses']->sum('amount') + $m['fixed_expenses']->sum('amount')
+                        $m['card_expenses']->sum('amount') + $m['fixed_expenses']->sum('amount') + $m['variable_expenses']->sum('amount')
                     );
                 @endphp
 
                 @foreach($projection as $yearMonth => $data)
                 @php
                     $income  = $data['salary'] + $data['variable_income']->sum('amount');
-                    $expense = $data['card_expenses']->sum('amount') + $data['fixed_expenses']->sum('amount');
+                    $expense = $data['card_expenses']->sum('amount') + $data['fixed_expenses']->sum('amount') + $data['variable_expenses']->sum('amount');
                     $balance = $data['balance'];
                     $pct     = $maxExpense > 0 ? round(($expense / $maxExpense) * 100) : 0;
                     $isFirst = $loop->first;
+                    $monthPayload = [
+                        'year_month'        => $yearMonth,
+                        'month_label'       => $data['month']->translatedFormat('F Y'),
+                        'salary'            => $data['salary'],
+                        'variable_income'   => $data['variable_income']->values(),
+                        'card_expenses'     => $data['card_expenses']->values(),
+                        'fixed_expenses'    => $data['fixed_expenses']->values(),
+                        'variable_expenses' => $data['variable_expenses']->values(),
+                        'balance'           => $balance,
+                    ];
                 @endphp
                 <div class="px-4 py-3 {{ !$loop->last ? 'border-bottom' : '' }} {{ $isFirst ? 'bg-light bg-opacity-50' : '' }}">
                     <div class="d-flex align-items-start justify-content-between mb-2">
-                        <div>
-                            <span class="fw-semibold text-capitalize" style="font-size:14px;">
-                                {{ $data['month']->translatedFormat('F Y') }}
-                                @if($isFirst)
-                                    <span class="badge bg-secondary ms-1" style="font-size:10px;vertical-align:middle;">atual</span>
-                                @endif
-                            </span>
+                        <div style="flex:1;min-width:0;">
+                            <div class="d-flex align-items-center gap-2">
+                                <span class="text-capitalize" style="font-size:14px;">
+                                    {{ $data['month']->translatedFormat('F Y') }}
+                                    @if($isFirst)
+                                        <span class="badge bg-secondary ms-1" style="font-size:10px;vertical-align:middle;">atual</span>
+                                    @endif
+                                </span>
+                                <button type="button"
+                                        class="btn btn-sm btn-outline-secondary py-0 px-2"
+                                        style="font-size:11px;border-radius:6px;"
+                                        title="Ver detalhes de {{ $data['month']->translatedFormat('F Y') }}"
+                                        data-bs-toggle="modal"
+                                        data-bs-target="#monthDetailModal"
+                                        data-month='@json($monthPayload)'>
+                                    <i class="bi bi-list-ul me-1"></i>detalhes
+                                </button>
+                            </div>
+                            <div class="text-muted mt-1" style="font-size:11px;">
+                                <i class="bi bi-calendar2-range me-1"></i>
+                                {{ $data['period_start']->translatedFormat('d M') }}
+                                –
+                                {{ $data['period_end']->translatedFormat('d M') }}
+                            </div>
                             <div class="d-flex gap-3 mt-1">
                                 <span class="small text-muted">
                                     <i class="bi bi-arrow-up text-success"></i>
@@ -153,7 +180,7 @@
                             </div>
                         </div>
                         <div class="text-end">
-                            <div class="fw-semibold" style="font-family:'DM Mono',monospace;font-size:15px;color:{{ $balance >= 0 ? 'var(--green)' : 'var(--red)' }}">
+                            <div class="" style="font-family:'DM Mono',monospace;font-size:15px;color:{{ $balance >= 0 ? 'var(--green)' : 'var(--red)' }}">
                                 {{ $balance >= 0 ? '+' : '' }}R${{ number_format($balance, 2, ',', '.') }}
                             </div>
                             <div class="small text-muted">saldo</div>
@@ -210,8 +237,8 @@
                     </div>
                     @endforeach
                     <div class="d-flex justify-content-between pt-2 mt-1 border-top">
-                        <span class="small fw-semibold text-muted">Total</span>
-                        <span class="fw-semibold" style="font-family:'DM Mono',monospace;">
+                        <span class="small  text-muted">Total</span>
+                        <span class="" style="font-family:'DM Mono',monospace;">
                             R${{ number_format($current['fixed_expenses']->sum('amount'), 2, ',', '.') }}
                         </span>
                     </div>
@@ -265,8 +292,8 @@
                     @endforeach
 
                     <div class="d-flex justify-content-between pt-2 mt-1 border-top">
-                        <span class="small fw-semibold text-muted">Total faturas</span>
-                        <span class="fw-semibold" style="font-family:'DM Mono',monospace;font-size:13px;">
+                        <span class="small  text-muted">Total faturas</span>
+                        <span class="" style="font-family:'DM Mono',monospace;font-size:13px;">
                     R${{ number_format($selectedInstallmentsMonth['card_expenses']->sum('amount'), 2, ',', '.') }}
                 </span>
                     </div>
@@ -276,6 +303,197 @@
             </div>
         </div>
 
+    </div>
+</div>
+
+{{-- Acúmulo de saldo mês a mês --}}
+@php
+    $accumulated = $totalWithYield ?? 0;
+    $accumulatedData = [];
+    foreach ($projection as $yearMonth => $data) {
+        $accumulated += $data['saldo_cc'];
+        $accumulatedData[$yearMonth] = [
+            'month'       => $data['month'],
+            'balance'     => $data['balance'],
+            'saldo_cc'    => $data['saldo_cc'],
+            'rdb_net'     => $data['rdb_net'],
+            'accumulated' => $accumulated,
+        ];
+    }
+    $maxAcc = collect($accumulatedData)->max(fn($d) => abs($d['accumulated']));
+@endphp
+
+<div class="card mt-4">
+    <div class="card-header d-flex align-items-center gap-2">
+        <i class="bi bi-bar-chart-line me-2 text-muted"></i>
+        <span>Acúmulo de saldo mês a mês</span>
+    </div>
+    <div class="card-body py-3 px-4">
+        <div class="d-flex align-items-end gap-3 overflow-auto pb-1" style="min-height:120px;">
+            @foreach($accumulatedData as $yearMonth => $d)
+            @php
+                $pct   = $maxAcc > 0 ? min(100, round((abs($d['accumulated']) / $maxAcc) * 100)) : 0;
+                $color = $d['accumulated'] >= 0 ? 'var(--green, #22c55e)' : 'var(--red, #ef4444)';
+                $isFirst = $loop->first;
+            @endphp
+            <div class="d-flex flex-column align-items-center flex-shrink-0" style="min-width:72px;">
+                <div class=" mb-1" style="font-family:'DM Mono',monospace;font-size:11px;color:{{ $color }};">
+                    {{ $d['accumulated'] >= 0 ? '+' : '' }}R${{ number_format($d['accumulated'], 0, ',', '.') }}
+                </div>
+                <div class="rounded" style="width:40px;height:{{ max(6, $pct) }}px;background:{{ $color }};opacity:0.85;transition:height .4s ease;"></div>
+                <div class="mt-2 text-muted text-capitalize text-center" style="font-size:11px;line-height:1.2;">
+                    {{ $d['month']->translatedFormat('M') }}<br>
+                    <span style="font-size:10px;">{{ $d['month']->format('Y') }}</span>
+                </div>
+                @if($isFirst)
+                    <span class="badge bg-secondary mt-1" style="font-size:9px;">atual</span>
+                @endif
+            </div>
+            @endforeach
+        </div>
+
+        {{-- Legenda de saldo mensal + acumulado --}}
+        <div class="mt-3 border-top pt-3">
+            <div class="row g-2">
+                @foreach($accumulatedData as $yearMonth => $d)
+                <div class="col-6 col-md-4 col-lg-2">
+                    <div class="d-flex flex-column" style="font-size:12px;">
+                        <span class="text-muted text-capitalize ">{{ $d['month']->translatedFormat('M/Y') }}</span>
+                        <span style="color:{{ $d['saldo_cc'] >= 0 ? 'var(--green,#22c55e)' : 'var(--red,#ef4444)' }};">
+                            C/C: {{ $d['saldo_cc'] >= 0 ? '+' : '' }}R${{ number_format($d['saldo_cc'], 0, ',', '.') }}
+                        </span>
+                        @if($d['rdb_net'] != 0)
+                        <span class="text-muted">
+                            RDB: {{ $d['rdb_net'] > 0 ? '-' : '+' }}R${{ number_format(abs($d['rdb_net']), 0, ',', '.') }}
+                        </span>
+                        @endif
+                        <span class="" style="color:{{ $d['accumulated'] >= 0 ? 'var(--green,#22c55e)' : 'var(--red,#ef4444)' }};">
+                            Acum.: {{ $d['accumulated'] >= 0 ? '+' : '' }}R${{ number_format($d['accumulated'], 0, ',', '.') }}
+                        </span>
+                    </div>
+                </div>
+                @endforeach
+            </div>
+        </div>
+    </div>
+</div>
+
+{{-- Resumo de investimentos --}}
+@if($investmentData->count() > 0)
+<div class="card mt-4">
+    <div class="card-header d-flex align-items-center justify-content-between">
+        <span><i class="bi bi-piggy-bank me-2 text-muted"></i>Investimentos</span>
+        <a href="{{ route('investments.index') }}" class="btn btn-sm btn-outline-secondary">
+            <i class="bi bi-arrow-right me-1"></i>Ver detalhes
+        </a>
+    </div>
+    <div class="card-body px-4 py-3">
+
+        {{-- Totalizadores --}}
+        <div class="row g-3 mb-4">
+            <div class="col-4">
+                <div class="d-flex flex-column">
+                    <span class="text-muted" style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.6px;">Total investido</span>
+                    <span style="font-family:'DM Mono',monospace;font-size:18px;color:var(--blue);">
+                        R${{ number_format($totalInvested, 2, ',', '.') }}
+                    </span>
+                </div>
+            </div>
+            <div class="col-4">
+                <div class="d-flex flex-column">
+                    <span class="text-muted" style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.6px;">Rendimento acumulado</span>
+                    <span style="font-family:'DM Mono',monospace;font-size:18px;color:var(--green);">
+                        +R${{ number_format($totalYield, 2, ',', '.') }}
+                    </span>
+                </div>
+            </div>
+            <div class="col-4">
+                <div class="d-flex flex-column">
+                    <span class="text-muted" style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.6px;">Total c/ rendimento</span>
+                    <span style="font-family:'DM Mono',monospace;font-size:18px;color:var(--text-primary);">
+                        R${{ number_format($totalWithYield, 2, ',', '.') }}
+                    </span>
+                </div>
+            </div>
+        </div>
+
+        {{-- Card por caixinha --}}
+        <div class="row g-3">
+            @foreach($investmentData as $item)
+            @php $box = $item['box']; @endphp
+            <div class="col-md-6 col-lg-4">
+                <div class="p-3 rounded-3 border" style="border-left: 4px solid {{ $box->color }} !important;">
+                    <div class="d-flex align-items-center justify-content-between mb-2">
+                        <div class="d-flex align-items-center gap-2">
+                            <span class="rounded-circle" style="width:10px;height:10px;background:{{ $box->color }};display:inline-block;flex-shrink:0;"></span>
+                            <span class="" style="font-size:13px;">{{ $box->name }}</span>
+                        </div>
+                        <span class="badge" style="background:{{ $box->color }}20;color:{{ $box->color }};font-size:10px;">
+                            {{ number_format($box->rate_percentage, 0) }}% CDI
+                        </span>
+                    </div>
+
+                    <div class="d-flex justify-content-between align-items-end mb-2">
+                        <div>
+                            <div class="text-muted" style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;">Saldo</div>
+                            <div style="font-family:'DM Mono',monospace;font-size:15px;">
+                                R${{ number_format($item['balance'], 2, ',', '.') }}
+                            </div>
+                        </div>
+                        <div class="text-end">
+                            <div class="text-muted" style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;">Rendimento</div>
+                            <div style="font-family:'DM Mono',monospace;font-size:13px;color:var(--green);">
+                                +R${{ number_format($item['yield'], 2, ',', '.') }}
+                            </div>
+                        </div>
+                        <div class="text-end">
+                            <div class="text-muted" style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;">Total</div>
+                            <div style="font-family:'DM Mono',monospace;font-size:13px;">
+                                R${{ number_format($item['total'], 2, ',', '.') }}
+                            </div>
+                        </div>
+                    </div>
+
+                    @if($box->max_amount)
+                    @php $pct = min(100, round(($item['balance'] / $box->max_amount) * 100)); @endphp
+                    <div>
+                        <div class="d-flex justify-content-between mb-1">
+                            <span style="font-size:10px;color:var(--text-muted);">Capacidade usada</span>
+                            <span style="font-size:10px;color:var(--text-muted);font-family:'DM Mono',monospace;">{{ $pct }}% · R${{ number_format($box->max_amount - $item['balance'], 0, ',', '.') }} livre</span>
+                        </div>
+                        <div style="height:5px;background:#e2e8f0;border-radius:999px;overflow:hidden;">
+                            <div style="height:100%;width:{{ $pct }}%;background:{{ $box->color }};border-radius:999px;transition:width .4s ease;"></div>
+                        </div>
+                    </div>
+                    @endif
+                </div>
+            </div>
+            @endforeach
+        </div>
+
+    </div>
+</div>
+@endif
+
+{{-- Modal: detalhes completos do mês --}}
+<div class="modal fade" id="monthDetailModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title mb-0" id="monthDetailModalTitle">Detalhes do mês</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+            </div>
+            <div class="modal-body px-4 py-3" id="monthDetailModalBody">
+                {{-- preenchido via JS --}}
+            </div>
+            <div class="modal-footer d-flex justify-content-between align-items-center">
+                <div class="d-flex flex-column" style="font-size:13px;">
+                    <span class="text-muted small">Saldo previsto</span>
+                    <span id="monthDetailBalance" style="font-family:'DM Mono',monospace;font-size:16px;"></span>
+                </div>
+                <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">Fechar</button>
+            </div>
+        </div>
     </div>
 </div>
 
@@ -291,8 +509,8 @@
                 <div data-role="list" class="d-flex flex-column gap-2"></div>
             </div>
             <div class="modal-footer d-flex justify-content-between">
-                <span class="small fw-semibold text-muted">Total</span>
-                <span class="fw-semibold" style="font-family:'DM Mono',monospace;" data-role="total">R$0,00</span>
+                <span class="small  text-muted">Total</span>
+                <span class="" style="font-family:'DM Mono',monospace;" data-role="total">R$0,00</span>
             </div>
         </div>
     </div>
@@ -302,6 +520,134 @@
 
 @push('scripts')
 <script>
+    (() => {
+        const money = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
+        const dateF = (d) => d ? new Date(d).toLocaleDateString('pt-BR', { day:'2-digit', month:'2-digit', year:'numeric' }) : '';
+
+        function makeRow(description, amount, extra = '') {
+            return `<div class="purchase-row-sm">
+                <span class="text-truncate me-2" style="max-width:60%;">${description}${extra ? ' <span class="text-muted" style="font-size:11px;">' + extra + '</span>' : ''}</span>
+                <span style="font-family:'DM Mono',monospace;font-size:13px;">${money.format(amount)}</span>
+            </div>`;
+        }
+
+        function makeSection(title, iconClass, colorClass, rows, total) {
+            if (!rows.length) return '';
+            return `<div class="mb-4">
+                <div class="d-flex align-items-center gap-2 mb-2">
+                    <i class="bi ${iconClass} ${colorClass}"></i>
+                    <span class="fw-semibold" style="font-size:13px;">${title}</span>
+                </div>
+                <div class="border rounded-3 px-3 py-1">
+                    ${rows.join('')}
+                    <div class="d-flex justify-content-between pt-2 mt-1 border-top">
+                        <span class="small text-muted">Total</span>
+                        <span class="fw-medium" style="font-family:'DM Mono',monospace;font-size:13px;">${money.format(total)}</span>
+                    </div>
+                </div>
+            </div>`;
+        }
+
+        const modal = document.getElementById('monthDetailModal');
+        if (!modal) return;
+
+        modal.addEventListener('show.bs.modal', (event) => {
+            const trigger = event.relatedTarget;
+            if (!trigger) return;
+
+            const d = JSON.parse(trigger.getAttribute('data-month') || '{}');
+            const body = document.getElementById('monthDetailModalBody');
+            const balanceEl = document.getElementById('monthDetailBalance');
+            document.getElementById('monthDetailModalTitle').textContent = d.month_label || 'Detalhes';
+
+            let html = '';
+
+            // ── Receitas ──────────────────────────────────────────────────────
+            const incomeRows = [];
+            let totalIncome = 0;
+
+            if (d.salary > 0) {
+                incomeRows.push(makeRow('Salário', d.salary));
+                totalIncome += Number(d.salary);
+            }
+            (d.variable_income || []).forEach(i => {
+                incomeRows.push(makeRow(i.description, i.amount, dateF(i.received_at)));
+                totalIncome += Number(i.amount);
+            });
+            html += makeSection('Receitas', 'bi-arrow-up-circle-fill', 'text-success', incomeRows, totalIncome);
+
+            // ── Despesas por cartão ───────────────────────────────────────────
+            const cardGroups = {};
+            (d.card_expenses || []).forEach(e => {
+                if (!cardGroups[e.card]) cardGroups[e.card] = { items: [], color: e.color, total: 0 };
+                cardGroups[e.card].items.push(e);
+                cardGroups[e.card].total += Number(e.amount);
+            });
+
+            let totalCards = 0;
+            Object.entries(cardGroups).forEach(([cardName, group]) => {
+                const rows = group.items.map(e => {
+                    const badge = e.is_recurring
+                        ? '<span class="badge bg-warning text-dark ms-1" style="font-size:10px;"><i class="bi bi-arrow-repeat"></i> recorrente</span>'
+                        : `<span class="badge bg-light text-muted border ms-1" style="font-size:10px;">${e.current_installment}/${e.installments}</span>`;
+                    return `<div class="purchase-row-sm">
+                        <span class="d-flex align-items-center gap-1 text-truncate me-2" style="max-width:65%;">
+                            <span style="width:8px;height:8px;border-radius:50%;background:${group.color || '#94a3b8'};flex-shrink:0;display:inline-block;"></span>
+                            ${e.description}${badge}
+                        </span>
+                        <span style="font-family:'DM Mono',monospace;font-size:13px;">${money.format(e.amount)}</span>
+                    </div>`;
+                });
+                if (rows.length) {
+                    html += `<div class="mb-4">
+                        <div class="d-flex align-items-center gap-2 mb-2">
+                            <span style="width:10px;height:10px;border-radius:50%;background:${group.color || '#94a3b8'};display:inline-block;flex-shrink:0;"></span>
+                            <i class="bi bi-credit-card text-danger"></i>
+                            <span class="fw-semibold" style="font-size:13px;">Cartão: ${cardName}</span>
+                        </div>
+                        <div class="border rounded-3 px-3 py-1">
+                            ${rows.join('')}
+                            <div class="d-flex justify-content-between pt-2 mt-1 border-top">
+                                <span class="small text-muted">Total ${cardName}</span>
+                                <span class="fw-medium" style="font-family:'DM Mono',monospace;font-size:13px;">${money.format(group.total)}</span>
+                            </div>
+                        </div>
+                    </div>`;
+                    totalCards += group.total;
+                }
+            });
+
+            // ── Gastos fixos ──────────────────────────────────────────────────
+            const fixedRows = (d.fixed_expenses || []).map(e => makeRow(e.description, e.amount));
+            const totalFixed = (d.fixed_expenses || []).reduce((s, e) => s + Number(e.amount), 0);
+            html += makeSection('Gastos fixos', 'bi-receipt', 'text-warning', fixedRows, totalFixed);
+
+            // ── Movimentações da conta ────────────────────────────────────────
+            const varRows = (d.variable_expenses || []).map(e => makeRow(e.description, e.amount, dateF(e.paid_at)));
+            const totalVar = (d.variable_expenses || []).reduce((s, e) => s + Number(e.amount), 0);
+            html += makeSection('Movimentações da conta', 'bi-bank', 'text-danger', varRows, totalVar);
+
+            // ── Totalizador ───────────────────────────────────────────────────
+            const totalExpense = totalCards + totalFixed + totalVar;
+            html += `<div class="border-top pt-3 mt-2">
+                <div class="d-flex justify-content-between mb-1">
+                    <span class="small text-muted fw-semibold">Total receitas</span>
+                    <span style="font-family:'DM Mono',monospace;font-size:13px;color:var(--bs-success);">${money.format(totalIncome)}</span>
+                </div>
+                <div class="d-flex justify-content-between">
+                    <span class="small text-muted fw-semibold">Total despesas</span>
+                    <span style="font-family:'DM Mono',monospace;font-size:13px;color:var(--bs-danger);">${money.format(totalExpense)}</span>
+                </div>
+            </div>`;
+
+            body.innerHTML = html || '<p class="text-muted small">Sem dados para este mês.</p>';
+
+            const balance = Number(d.balance);
+            balanceEl.textContent = (balance >= 0 ? '+' : '') + money.format(balance);
+            balanceEl.style.color = balance >= 0 ? 'var(--bs-success)' : 'var(--bs-danger)';
+        });
+    })();
+
     (() => {
         const modal = document.getElementById('cardExpensesModal');
         if (!modal) return;
