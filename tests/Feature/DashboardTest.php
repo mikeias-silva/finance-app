@@ -74,6 +74,18 @@ class DashboardTest extends TestCase
         $this->assertEquals(5000.00, $response->viewData('projection')['2026-09']['accumulated']);
     }
 
+    public function test_the_chart_starts_from_the_balance_of_today(): void
+    {
+        $this->givenABalanceOf(1000.00, salaryCredited: false);
+
+        $response = $this->unlocked()->get('/');
+
+        // A cadeia parte do saldo real; sem ele no gráfico, a primeira barra já é
+        // o fim do ciclo e não se vê de onde a linha saiu.
+        $response->assertOk()->assertSee('Saldo em conta mês a mês');
+        $this->assertEquals(1000.00, $response->viewData('anchor'));
+    }
+
     private function givenABalanceOf(float $total, ?bool $salaryCredited): void
     {
         BalanceSnapshot::create([

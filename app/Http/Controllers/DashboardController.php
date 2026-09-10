@@ -63,6 +63,7 @@ class DashboardController extends Controller
 
         return view('dashboard.index', compact(
             'projection',
+            'anchor',
             'months',
             'installmentsMonth',
             'selectedInstallmentsMonth',

@@ -259,10 +259,21 @@
             </table>
         </div>
 
+        {{-- O aviso sem a ação obrigava a caçar a opção no modal: o botão abre lá
+             já com ela marcada, faltando só a confirmação — que a regravação
+             apaga as movimentações e continua sendo exigida. --}}
         @if(! $import['replaced_investments'] && collect($import['investment_boxes'])->contains('matches', false))
-            <div class="card-body pt-3 text-muted small">
-                <i class="bi bi-info-circle"></i>
-                Para alinhar os valores, marque <strong>Regravar caixinhas</strong> nas opções da importação.
+            <div class="card-body pt-3 d-flex align-items-center gap-3 flex-wrap">
+                <button type="button"
+                        class="btn btn-sm btn-outline-secondary d-flex align-items-center gap-2"
+                        data-bs-toggle="modal"
+                        data-bs-target="#nubankImportModal"
+                        data-import-open-replace>
+                    <i class="bi bi-arrow-repeat"></i> Alinhar com a API
+                </button>
+                <span class="text-muted small">
+                    Regrava as caixinhas com as posições reais — apaga o que não vier da API.
+                </span>
             </div>
         @endif
     @endif

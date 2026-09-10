@@ -201,6 +201,55 @@ class NubankImportTest extends TestCase
             ->assertSee('Nada foi gravado');
     }
 
+    public function test_a_diverging_box_offers_the_action_to_align_it(): void
+    {
+        $this->unlock();
+        $this->givenABoxDivergingFromTheApi();
+
+        $this->from('/')->post('/imports/nubank');
+
+        // O aviso e a ação moram na mesma tela: quem vê "Divergente" alcança a
+        // regravação num clique, em vez de caçar a opção no modal.
+        $this->get('/')
+            ->assertOk()
+            ->assertSee('Divergente')
+            ->assertSee('data-import-open-replace', false);
+    }
+
+    private function givenABoxDivergingFromTheApi(): void
+    {
+        $box = InvestmentBox::create([
+            'name' => 'Reserva',
+            'rate_percentage' => 100,
+            'is_active' => true,
+        ]);
+        InvestmentTransaction::create([
+            'investment_box_id' => $box->id,
+            'type' => 'deposit',
+            'amount' => 500.00,
+            'transacted_at' => $this->date,
+        ]);
+
+        // A API mostra 690 de principal onde o banco tem 500.
+        Http::fake([
+            '*/auth' => Http::response(['apiKey' => 'chave-falsa']),
+            '*/accounts*' => Http::response([
+                'results' => [['id' => 'acc-1', 'type' => 'BANK', 'balance' => 1000.00, 'currencyCode' => 'BRL']],
+            ]),
+            '*/v2/transactions*' => Http::response(['results' => [], 'next' => null]),
+            '*/investments*' => Http::response([
+                'results' => [[
+                    'id' => 'pos-1',
+                    'balance' => 700.00,
+                    'amountOriginal' => 690.00,
+                    'rate' => 100,
+                    'purchaseDate' => $this->date,
+                ]],
+                'totalPages' => 1,
+            ]),
+        ]);
+    }
+
     private function unlock(): void
     {
         $this->post('/login', ['password' => self::PASSWORD]);

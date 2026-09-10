@@ -137,6 +137,17 @@
             });
         }
 
+        // O aviso de caixinha divergente vive no resultado da importação e aponta
+        // para cá: chega com a opção marcada e o alerta aberto, faltando confirmar.
+        document.querySelectorAll('[data-import-open-replace]').forEach((trigger) => {
+            trigger.addEventListener('click', () => {
+                if (replace && !replace.checked) {
+                    replace.checked = true;
+                    replace.dispatchEvent(new Event('change'));
+                }
+            });
+        });
+
         // Erro de validação vem do formulário do modal, que já fechou no submit:
         // reabre para o usuário ver a mensagem e corrigir.
         @if($errors->any())

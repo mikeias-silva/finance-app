@@ -114,69 +114,102 @@
 
 
 
-{{-- Acúmulo de saldo mês a mês --}}
+{{-- Saldo em conta mês a mês --}}
 @php
-    // O acumulado vem do ProjectionService::accumulate(), ancorado no saldo real de hoje.
-    $accumulatedData = [];
-    foreach ($projection as $yearMonth => $data) {
-        $accumulatedData[$yearMonth] = [
-            'month'       => $data['month'],
-            'balance'     => $data['balance'],
-            'saldo_cc'    => $data['saldo_cc'],
-            'rdb_net'     => $data['rdb_net'],
-            'pending'     => $data['pending'],
-            'accumulated' => $data['accumulated'],
+    // A cadeia parte do saldo real de hoje (conta corrente + caixinhas) e aplica
+    // receitas menos despesas de cada ciclo. Movimentação entre conta e caixinha
+    // não entra: é o mesmo dinheiro trocando de lugar.
+    $chartPoints = [[
+        'label'    => 'hoje',
+        'sublabel' => now()->format('d/m'),
+        'value'    => (float) $anchor,
+        'is_today' => true,
+    ]];
+
+    foreach ($projection as $data) {
+        $chartPoints[] = [
+            'label'    => $data['month']->translatedFormat('M'),
+            'sublabel' => $data['month']->format('Y'),
+            'value'    => (float) $data['accumulated'],
+            'is_today' => false,
         ];
     }
-    $maxAcc = collect($accumulatedData)->max(fn($d) => abs($d['accumulated']));
+
+    // Altura medida a partir do zero, com o negativo descendo: uma queda precisa
+    // descer, e não crescer para o outro lado como faria a altura em módulo.
+    $chartHeight = 120;
+    $chartValues = array_column($chartPoints, 'value');
+    $maxPos  = max(0, max($chartValues));
+    $minNeg  = min(0, min($chartValues));
+    $span    = ($maxPos - $minNeg) ?: 1;
+    $posZone = (int) round($chartHeight * $maxPos / $span);
+    $negZone = $chartHeight - $posZone;
 @endphp
 
 <div class="card mt-4">
     <div class="card-header d-flex align-items-center gap-2">
         <i class="bi bi-bar-chart-line me-2 text-muted"></i>
-        <span>Acúmulo de saldo mês a mês</span>
+        <span>Saldo em conta mês a mês</span>
+        <span class="text-muted" style="font-size:11px;">conta corrente + caixinhas</span>
     </div>
     <div class="card-body py-3 px-4">
-        <div class="d-flex align-items-end gap-3 overflow-auto pb-1" style="min-height:120px;">
-            @foreach($accumulatedData as $yearMonth => $d)
+        <div class="d-flex align-items-start overflow-auto pb-1">
+            @foreach($chartPoints as $point)
             @php
-                $pct   = $maxAcc > 0 ? min(100, round((abs($d['accumulated']) / $maxAcc) * 100)) : 0;
-                $color = $d['accumulated'] >= 0 ? 'var(--green-text)' : 'var(--red-text)';
-                $isFirst = $loop->first;
+                $value = $point['value'];
+                $height = $value >= 0
+                    ? ($maxPos > 0 ? max(2, (int) round($posZone * $value / $maxPos)) : 0)
+                    : ($minNeg < 0 ? max(2, (int) round($negZone * abs($value) / abs($minNeg))) : 0);
+                $color = $value >= 0 ? 'var(--green-text)' : 'var(--red-text)';
             @endphp
-            <div class="d-flex flex-column align-items-center flex-shrink-0" style="min-width:72px;">
-                <div class=" mb-1" style="font-family:'DM Mono',monospace;font-size:11px;color:{{ $color }};">
-                    {{ $d['accumulated'] >= 0 ? '+' : '' }}R${{ number_format($d['accumulated'], 0, ',', '.') }}
+            <div class="flex-shrink-0 px-2 text-center" style="min-width:76px;">
+                <div class="mb-1" style="font-family:'DM Mono',monospace;font-size:11px;color:{{ $color }};">
+                    {{ $value >= 0 ? '+' : '' }}R${{ number_format($value, 0, ',', '.') }}
                 </div>
-                <div class="rounded" style="width:40px;height:{{ max(6, $pct) }}px;background:{{ $color }};opacity:0.85;transition:height .4s ease;"></div>
-                <div class="mt-2 text-muted text-capitalize text-center" style="font-size:11px;line-height:1.2;">
-                    {{ $d['month']->translatedFormat('M') }}<br>
-                    <span style="font-size:10px;">{{ $d['month']->format('Y') }}</span>
+
+                <div class="d-flex flex-column align-items-center" style="height:{{ $chartHeight }}px;">
+                    <div class="d-flex align-items-end" style="height:{{ $posZone }}px;">
+                        @if($value >= 0)
+                            <div class="rounded-top"
+                                 style="width:40px;height:{{ $height }}px;background:{{ $color }};opacity:{{ $point['is_today'] ? '1' : '.85' }};transition:height .4s ease;"></div>
+                        @endif
+                    </div>
+
+                    {{-- Linha do zero: esticada além do padding da coluna para
+                         encostar na vizinha e atravessar o gráfico inteiro. --}}
+                    <div style="width:calc(100% + 1rem);margin:0 -0.5rem;border-top:1px solid var(--card-border);"></div>
+
+                    <div class="d-flex align-items-start" style="height:{{ $negZone }}px;">
+                        @if($value < 0)
+                            <div class="rounded-bottom"
+                                 style="width:40px;height:{{ $height }}px;background:{{ $color }};opacity:.85;transition:height .4s ease;"></div>
+                        @endif
+                    </div>
                 </div>
-                @if($isFirst)
-                    <span class="badge bg-secondary mt-1" style="font-size:9px;">atual</span>
+
+                <div class="mt-2 text-muted text-capitalize" style="font-size:11px;line-height:1.2;">
+                    {{ $point['label'] }}<br>
+                    <span style="font-size:10px;">{{ $point['sublabel'] }}</span>
+                </div>
+                @if($point['is_today'])
+                    <span class="badge bg-secondary mt-1" style="font-size:9px;">agora</span>
                 @endif
             </div>
             @endforeach
         </div>
 
-        {{-- Legenda de saldo mensal + acumulado --}}
+        {{-- Saldo do ciclo (receitas − despesas) ao lado do saldo em conta que ele produz --}}
         <div class="mt-3 border-top pt-3">
             <div class="row g-2">
-                @foreach($accumulatedData as $yearMonth => $d)
+                @foreach($projection as $yearMonth => $data)
                 <div class="col-6 col-md-4 col-lg-2">
                     <div class="d-flex flex-column" style="font-size:12px;">
-                        <span class="text-muted text-capitalize ">{{ $d['month']->translatedFormat('M/Y') }}</span>
-                        <span style="color:{{ $d['saldo_cc'] >= 0 ? 'var(--green-text)' : 'var(--red-text)' }};">
-                            C/C: {{ $d['saldo_cc'] >= 0 ? '+' : '' }}R${{ number_format($d['saldo_cc'], 0, ',', '.') }}
+                        <span class="text-muted text-capitalize">{{ $data['month']->translatedFormat('M/Y') }}</span>
+                        <span style="color:{{ $data['balance'] >= 0 ? 'var(--green-text)' : 'var(--red-text)' }};">
+                            No mês: {{ $data['balance'] >= 0 ? '+' : '' }}R${{ number_format($data['balance'], 0, ',', '.') }}
                         </span>
-                        @if($d['rdb_net'] != 0)
-                        <span class="text-muted">
-                            RDB: {{ $d['rdb_net'] > 0 ? '-' : '+' }}R${{ number_format(abs($d['rdb_net']), 0, ',', '.') }}
-                        </span>
-                        @endif
-                        <span class="" style="color:{{ $d['accumulated'] >= 0 ? 'var(--green-text)' : 'var(--red-text)' }};">
-                            Acum.: {{ $d['accumulated'] >= 0 ? '+' : '' }}R${{ number_format($d['accumulated'], 0, ',', '.') }}
+                        <span style="color:{{ $data['accumulated'] >= 0 ? 'var(--green-text)' : 'var(--red-text)' }};">
+                            Em conta: {{ $data['accumulated'] >= 0 ? '+' : '' }}R${{ number_format($data['accumulated'], 0, ',', '.') }}
                         </span>
                     </div>
                 </div>
@@ -379,12 +412,12 @@
                                 </div>
                                 <div class="small text-muted">saldo</div>
 
-                                {{-- O saldo acima é só deste ciclo; o acumulado carrega a
-                                     sobra de todos os meses anteriores, ancorada no saldo real de hoje. --}}
+                                {{-- O saldo acima é só deste ciclo; o de baixo é quanto sobra
+                                     em conta depois dele, partindo do saldo real de hoje. --}}
                                 <div class="mt-1" style="font-family:'DM Mono',monospace;font-size:12px;color:{{ $data['accumulated'] >= 0 ? 'var(--green-text)' : 'var(--red-text)' }};">
                                     {{ $data['accumulated'] >= 0 ? '+' : '' }}R${{ number_format($data['accumulated'], 2, ',', '.') }}
                                 </div>
-                                <div class="text-muted" style="font-size:10px;">acumulado</div>
+                                <div class="text-muted" style="font-size:10px;">saldo em conta</div>
                             </div>
                         </div>
 
