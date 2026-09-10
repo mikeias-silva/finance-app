@@ -11,25 +11,28 @@ use Illuminate\View\View;
 
 class VariableIncomeController extends Controller
 {
-    public function index(): View
+    public function index(Request $request): View
     {
-        $period = BillingPeriod::for(now());
+        $month = $request->input('month', now()->format('Y-m'));
+
+        $period = BillingPeriod::for(Carbon::parse($month . '-01'));
+        $start  = $period['start'];
+        $end    = $period['end'];
 
         $incomes = VariableIncome::query()
+            ->whereBetween('received_at', [$start->toDateString(), $end->toDateString()])
             ->orderByDesc('received_at')
             ->orderByDesc('id')
-            ->paginate(20);
+            ->paginate(20)
+            ->withQueryString();
 
         $currentMonthTotal = VariableIncome::query()
-            ->whereBetween('received_at', [
-                $period['start']->toDateString(),
-                $period['end']->toDateString(),
-            ])
+            ->whereBetween('received_at', [$start->toDateString(), $end->toDateString()])
             ->sum('amount');
 
         $totalAmount = VariableIncome::query()->sum('amount');
 
-        return view('variable-incomes.index', compact('incomes', 'currentMonthTotal', 'totalAmount'));
+        return view('variable-incomes.index', compact('incomes', 'currentMonthTotal', 'totalAmount', 'month', 'start', 'end'));
     }
 
     public function create(): View

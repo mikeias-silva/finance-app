@@ -12,7 +12,7 @@
     .investment-card {
         border: 1px solid var(--card-border);
         border-radius: 14px;
-        background: #fff;
+        background: var(--surface);
         box-shadow: 0 1px 3px rgba(15, 23, 42, .04);
         overflow: hidden;
     }
@@ -34,7 +34,7 @@
     }
     .progress-thin {
         height: 8px;
-        background: #e2e8f0;
+        background: var(--card-border);
         border-radius: 999px;
         overflow: hidden;
     }
@@ -170,7 +170,7 @@
                                         </div>
                                         <div class="d-flex justify-content-between small mb-1">
                                             <span class="text-muted">Rendimento acumulado</span>
-                                            <span class="mono" style="color: var(--green);">+R$ {{ number_format($item['yield'], 2, ',', '.') }}</span>
+                                            <span class="mono" style="color: var(--green-text);">+R$ {{ number_format($item['yield'], 2, ',', '.') }}</span>
                                         </div>
                                         <div class="d-flex justify-content-between align-items-end">
                                             <span class="text-muted small">Total</span>

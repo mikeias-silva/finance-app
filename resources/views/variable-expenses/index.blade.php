@@ -90,6 +90,7 @@
                 <tr>
                     <td class="text-muted small" style="white-space:nowrap;">
                         {{ \Carbon\Carbon::parse($expense->paid_at)->format('d/m/Y') }}
+                        <br><span style="font-size:10px;">{{ $expense->created_at->format('H:i') }}</span>
                     </td>
                     <td class="fw-medium">{{ $expense->description }}</td>
                     <td>
@@ -101,7 +102,7 @@
                             <span class="text-muted small">—</span>
                         @endif
                     </td>
-                    <td style="font-family:'DM Mono',monospace; color:var(--red); white-space:nowrap;">
+                    <td style="font-family:'DM Mono',monospace; color: var(--red-text); white-space:nowrap;">
                         R$ {{ number_format($expense->amount, 2, ',', '.') }}
                     </td>
                     <td class="text-end">

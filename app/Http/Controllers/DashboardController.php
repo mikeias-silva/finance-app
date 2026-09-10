@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\BalanceSnapshot;
 use App\Models\InvestmentBox;
 use App\Services\BillingPeriod;
 use App\Services\InvestmentService;
@@ -12,6 +13,7 @@ class DashboardController extends Controller
 {
     public function index(Request $request, ProjectionService $service, InvestmentService $investmentService)
     {
+
         $months = (int) $request->input('months', 6);
         $months = max(1, min(24, $months)); // entre 1 e 24
 
@@ -34,6 +36,12 @@ class DashboardController extends Controller
 
         $selectedInstallmentsMonth = $projection->get($installmentsMonth);
 
+        // Âncora do acumulado: o saldo real gravado na última importação. A tela
+        // inicial não consulta o Pluggy — a leitura acontece quando o usuário manda
+        // atualizar. Antes da primeira importação, cai para o total simulado das
+        // caixinhas.
+        $balanceSnapshot = BalanceSnapshot::latestSnapshot();
+
         $investmentBoxes = InvestmentBox::with('transactions')->where('is_active', true)->get();
         $investmentData  = $investmentBoxes->map(fn($box) => [
             'box'     => $box,
@@ -45,6 +53,14 @@ class DashboardController extends Controller
         $totalYield      = $investmentData->sum('yield');
         $totalWithYield  = $investmentData->sum('total');
 
+        $anchor = $balanceSnapshot?->total ?? $totalWithYield;
+
+        // O salário só sai do previsto quando o crédito aparece no extrato. Sem
+        // importação que responda por ele, a projeção decide pelo calendário.
+        $salaryCredited = $balanceSnapshot?->salary_credited;
+
+        $projection = $service->accumulate($projection, $anchor, $salaryCredited);
+
         return view('dashboard.index', compact(
             'projection',
             'months',
@@ -53,7 +69,8 @@ class DashboardController extends Controller
             'investmentData',
             'totalInvested',
             'totalYield',
-            'totalWithYield'
+            'totalWithYield',
+            'balanceSnapshot'
         ));
     }
 }

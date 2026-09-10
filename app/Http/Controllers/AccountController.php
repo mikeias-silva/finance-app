@@ -3,7 +3,10 @@
 namespace App\Http\Controllers;
 
 use App\Services\BillingPeriod;
+use App\Services\CaixaBillService;
 use App\Services\PluggyService;
+use App\Services\ProjectionService;
+use App\Services\RecurringChargeDetector;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -56,109 +59,146 @@ class AccountController extends Controller
     }
 
     /**
-     * Extrato da fatura do cartão de crédito da Caixa, filtrando por mês/ano
-     * do vencimento (?month=7&year=2026). O período de transações é
-     * [fechamento da fatura anterior + 1 dia, fechamento desta fatura].
-     * Opcional: ?since=2026-07-22 para listar só lançamentos depois dessa data.
+     * Fatura do cartão de crédito da Caixa por mês/ano do vencimento
+     * (?month=8&year=2026). Opcional: ?since=2026-07-22 para listar só
+     * lançamentos posteriores a essa data.
      */
-    public function caixaCreditCardStatement(Request $request, PluggyService $pluggy): JsonResponse
+    public function caixaCreditCardStatement(Request $request, CaixaBillService $bills): JsonResponse
     {
-        $itemId = config('pluggy.items.caixa');
+        return response()->json($bills->resolve(
+            (int) $request->query('month', now()->month),
+            (int) $request->query('year', now()->year),
+            $request->query('since'),
+        ));
+    }
 
-        $account = collect($pluggy->listAccounts($itemId))
+    /**
+     * Fatura da Caixa juntando API e cadastro manual, sem duplicar: o que a API já
+     * publicou mais o que só existe no banco — a Caixa demora a publicar, e o
+     * lançamento manual antecipa a previsão.
+     */
+    public function caixaCreditCardMergedStatement(
+        Request $request,
+        ProjectionService $projection,
+        CaixaBillService $bills,
+    ): JsonResponse {
+        // ProjectionService usa o Carbon do Illuminate, não o do pacote base.
+        $month = \Illuminate\Support\Carbon::create(
+            (int) $request->query('year', now()->year),
+            (int) $request->query('month', now()->month),
+            1
+        );
+
+        $merged = $projection->mergedCaixaItems($month, $bills);
+
+        if ($merged === null) {
+            throw new RuntimeException("Fatura não encontrada para {$month->month}/{$month->year}.");
+        }
+
+        return response()->json($merged);
+    }
+
+    /**
+     * Lançamentos do cartão de crédito da Caixa, sem o recorte por fatura.
+     * ?card=4789 filtra um cartão específico (titular ou adicional);
+     * ?from=/?to= delimitam o período (padrão: últimos 90 dias).
+     */
+    public function caixaCreditCardTransactions(Request $request, PluggyService $pluggy, CaixaBillService $bills): JsonResponse
+    {
+        $account = collect($pluggy->listAccounts(config('pluggy.items.caixa')))
             ->firstWhere('type', 'CREDIT');
 
         if (! $account) {
             throw new RuntimeException('Cartão de crédito da Caixa não encontrado.');
         }
 
-        $month = (int) $request->query('month', now()->month);
-        $year = (int) $request->query('year', now()->year);
-        $since = $request->query('since');
+        $from = Carbon::parse($request->query('from', now()->subDays(90)->toDateString()))->startOfDay();
+        $to = Carbon::parse($request->query('to', now()->toDateString()))->endOfDay();
+        $card = $request->query('card');
 
-        $bills = collect($pluggy->listBills($account['id']))
-            ->sortBy(fn (array $bill) => Carbon::parse($bill['billClosingDate'] ?? $bill['dueDate']))
-            ->values();
+        $transactions = $pluggy->listTransactions($account['id'], $from, $to);
+        $summary = $this->summarizeByCard($transactions, $account, $bills);
 
-        $billIndex = $bills->search(function (array $bill) use ($month, $year) {
-            $dueDate = Carbon::parse($bill['dueDate']);
-            return $dueDate->month === $month && $dueDate->year === $year;
-        });
-
-        if ($billIndex === false) {
-            return $this->openCaixaBill($pluggy, $account, $bills, $month, $year, $since);
+        if ($card !== null) {
+            $transactions = array_values(array_filter(
+                $transactions,
+                fn (array $t) => ($t['creditCardMetadata']['cardNumber'] ?? null) === $card
+            ));
         }
 
-        $bill = $bills[$billIndex];
-        $end = Carbon::parse($bill['billClosingDate'] ?? $bill['dueDate'])->endOfDay();
-
-        $previousBill = $billIndex > 0 ? $bills[$billIndex - 1] : null;
-        $start = $previousBill
-            ? Carbon::parse($previousBill['billClosingDate'] ?? $previousBill['dueDate'])->addDay()->startOfDay()
-            : $end->copy()->subMonth()->addDay()->startOfDay();
-
-        $transactions = $this->filterSince($pluggy->listTransactions($account['id'], $start, $end), $since);
-
         return response()->json([
-            'bill' => $bill,
             'period' => [
-                'start' => $start->toDateString(),
-                'end' => $end->toDateString(),
+                'start' => $from->toDateString(),
+                'end' => $to->toDateString(),
             ],
+            'card' => $card,
+            'cards' => $summary,
             'currency' => $account['currencyCode'],
+            'count' => count($transactions),
+            'total' => $bills->transactionsTotal($transactions),
             'transactions' => $transactions,
         ]);
     }
 
     /**
-     * A fatura do ciclo atual ainda não fechou (não existe em GET /bills).
-     * Só tratamos como "fatura em aberto" se o mês/ano pedido for exatamente
-     * o ciclo seguinte ao da última fatura fechada; fora isso, é erro real.
+     * Cobranças recorrentes detectadas nos cartões de crédito (Caixa e Nubank).
+     * Só cartões: recorrências de conta corrente, como a aplicação mensal em
+     * caixinha, não são gasto de fatura e ficam fora.
      */
-    private function openCaixaBill(PluggyService $pluggy, array $account, \Illuminate\Support\Collection $bills, int $month, int $year, ?string $since): JsonResponse
+    public function creditCardRecurringCharges(PluggyService $pluggy, RecurringChargeDetector $detector): JsonResponse
     {
-        $lastBill = $bills->last();
-        $nextDue = $lastBill ? Carbon::parse($lastBill['dueDate'])->addMonthNoOverflow() : null;
+        $cards = [];
+        $total = 0.0;
 
-        if (! $nextDue || $nextDue->month !== $month || $nextDue->year !== $year) {
-            throw new RuntimeException("Fatura não encontrada para {$month}/{$year}.");
+        foreach (array_filter(config('pluggy.items')) as $institution => $itemId) {
+            $account = collect($pluggy->listAccounts($itemId))->firstWhere('type', 'CREDIT');
+
+            if (! $account) {
+                continue;
+            }
+
+            $charges = $detector->detect(
+                $pluggy->listTransactions($account['id'], now()->subYears(2), now())
+            );
+
+            $monthly = round(array_sum(array_column($charges, 'amount')), 2);
+            $total += $monthly;
+
+            $cards[] = [
+                'institution' => $institution,
+                'account_id' => $account['id'],
+                'monthly_total' => $monthly,
+                'charges' => $charges,
+            ];
         }
 
-        $start = Carbon::parse($lastBill['billClosingDate'] ?? $lastBill['dueDate'])->addDay()->startOfDay();
-        $end = now()->endOfDay();
-
-        $transactions = $this->filterSince($pluggy->listTransactions($account['id'], $start, $end), $since);
-
         return response()->json([
-            'bill' => [
-                'id' => null,
-                'dueDate' => null,
-                'billClosingDate' => null,
-                'totalAmount' => $account['balance'],
-                'totalAmountCurrencyCode' => $account['currencyCode'],
-                'status' => 'OPEN',
-            ],
-            'period' => [
-                'start' => $start->toDateString(),
-                'end' => $end->toDateString(),
-            ],
-            'currency' => $account['currencyCode'],
-            'transactions' => $transactions,
+            'monthly_total' => round($total, 2),
+            'cards' => $cards,
         ]);
     }
 
-    /** Filtra lançamentos com data estritamente posterior a $since (fim do dia), se informado. */
-    private function filterSince(array $transactions, ?string $since): array
+    /**
+     * Totais por cartão no período. Os lançamentos sem cardNumber são pagamentos
+     * de fatura, que não pertencem a nenhum cartão — ficam agrupados sob null.
+     */
+    private function summarizeByCard(array $transactions, array $account, CaixaBillService $bills): array
     {
-        if (! $since) {
-            return $transactions;
-        }
+        $primary = $account['number'] ?? null;
+        $additional = array_column($account['creditData']['additionalCards'] ?? [], 'number');
 
-        $sinceDate = Carbon::parse($since)->endOfDay();
-
-        return array_values(array_filter(
-            $transactions,
-            fn (array $t) => Carbon::parse($t['date'])->greaterThan($sinceDate)
-        ));
+        // groupBy devolve chaves numéricas como int, então compara sempre como string.
+        return collect($transactions)
+            ->groupBy(fn (array $t) => $t['creditCardMetadata']['cardNumber'] ?? '')
+            ->map(fn ($group, $number) => [
+                'number' => (string) $number === '' ? null : (string) $number,
+                'is_primary' => (string) $number === (string) $primary,
+                'is_additional' => in_array((string) $number, $additional, true),
+                'count' => $group->count(),
+                'total' => $bills->transactionsTotal($group->all()),
+            ])
+            ->sortByDesc('count')
+            ->values()
+            ->all();
     }
 }

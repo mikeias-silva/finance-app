@@ -13,4 +13,9 @@ class CreditCard extends Model
         'closing_changed_at'  => 'date',
         'billing_skip_months' => 'array',
     ];
+
+    public function purchases()
+    {
+        return $this->hasMany(CreditCardPurchase::class);
+    }
 }

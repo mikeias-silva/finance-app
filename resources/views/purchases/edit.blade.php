@@ -9,7 +9,7 @@
         justify-content: space-between;
         align-items: center;
         padding: 6px 0;
-        border-bottom: 1px solid #f1f5f9;
+        border-bottom: 1px solid var(--surface-alt);
         font-size: 13px;
     }
     .preview-installment:last-child { border-bottom: none; }
@@ -121,7 +121,7 @@
                 <i class="bi bi-calendar3 me-2 text-muted"></i>Preview das parcelas
             </div>
             <div class="card-body">
-                <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:16px;">
+                <div style="background:var(--surface-hover);border:1px solid var(--card-border);border-radius:10px;padding:16px;">
                     <div id="preview-empty" class="text-muted text-center small py-2">
                         Atualize os campos para visualizar.
                     </div>

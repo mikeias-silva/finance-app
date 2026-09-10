@@ -3,63 +3,71 @@
 namespace App\Http\Controllers;
 
 use App\Models\Salary;
+use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\View\View;
 
 class SalaryController extends Controller
 {
-    /**
-     * Display a listing of the resource.
-     */
-    public function index()
+    public function index(): View
     {
-        //
+        $salaries = Salary::query()
+            ->orderByDesc('effective_from')
+            ->orderByDesc('id')
+            ->get();
+
+        $current = $salaries->first();
+
+        return view('salaries.index', compact('salaries', 'current'));
     }
 
-    /**
-     * Show the form for creating a new resource.
-     */
-    public function create()
+    public function create(): View
     {
-        //
+        return view('salaries.create');
     }
 
-    /**
-     * Store a newly created resource in storage.
-     */
-    public function store(Request $request)
+    public function store(Request $request): RedirectResponse
     {
-        //
+        Salary::create($this->validateData($request));
+
+        return redirect()
+            ->route('salaries.index')
+            ->with('success', 'Salário cadastrado com sucesso.');
     }
 
-    /**
-     * Display the specified resource.
-     */
-    public function show(Salary $salary)
+    public function show(Salary $salary): RedirectResponse
     {
-        //
+        return redirect()->route('salaries.edit', $salary);
     }
 
-    /**
-     * Show the form for editing the specified resource.
-     */
-    public function edit(Salary $salary)
+    public function edit(Salary $salary): View
     {
-        //
+        return view('salaries.edit', compact('salary'));
     }
 
-    /**
-     * Update the specified resource in storage.
-     */
-    public function update(Request $request, Salary $salary)
+    public function update(Request $request, Salary $salary): RedirectResponse
     {
-        //
+        $salary->update($this->validateData($request));
+
+        return redirect()
+            ->route('salaries.index')
+            ->with('success', 'Salário atualizado com sucesso.');
     }
 
-    /**
-     * Remove the specified resource from storage.
-     */
-    public function destroy(Salary $salary)
+    public function destroy(Salary $salary): RedirectResponse
     {
-        //
+        $salary->delete();
+
+        return redirect()
+            ->route('salaries.index')
+            ->with('success', 'Salário excluído com sucesso.');
+    }
+
+    private function validateData(Request $request): array
+    {
+        return $request->validate([
+            'amount' => ['required', 'numeric', 'min:0.01'],
+            'effective_from' => ['required', 'date'],
+        ]);
     }
 }

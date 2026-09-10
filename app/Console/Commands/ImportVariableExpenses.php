@@ -9,6 +9,7 @@ use App\Models\Salary;
 use App\Models\VariableExpense;
 use App\Models\VariableIncome;
 use App\Services\InvestmentService;
+use App\Services\StatementClassifier;
 use Carbon\Carbon;
 use Illuminate\Console\Command;
 
@@ -18,27 +19,7 @@ class ImportVariableExpenses extends Command
 
     protected $description = 'Importa extrato CSV: débitos vão para variable_expenses, créditos para variable_incomes';
 
-    /**
-     * Padrões de gastos fixos identificados no extrato.
-     * 'db_description' é o nome exato na tabela fixed_expenses para buscar o valor previsto.
-     * null = sem previsão (pagamento de cartão), apenas ignora sem calcular diferença.
-     */
-    /** Padrões de transferência de salário (apenas confirmação, não entra como receita variável). */
-    private array $salaryPatterns = [
-        'MIKEIAS SILVA GOMES DE AZEVEDO',
-    ];
-
-    private array $fixedExpensePatterns = [
-        'MUNICIPIO DE PONTA GROSSA'    => ['label' => 'IPTU',                  'db_description' => 'IPTU Lote'],
-        'BANCO GM S.A'                 => ['label' => 'Financiamento Onix',    'db_description' => 'Financiamento Onix'],
-        'MSS VECTRA LOT SPE LTDA'      => ['label' => 'Financiamento Terreno', 'db_description' => 'Financiamento Terreno'],
-        'TIM S A - 02.421.421/0001-11' => ['label' => 'Tim',                   'db_description' => 'Tim'],
-        'STAR PROTECAO VEICULAR'       => ['label' => 'Seguro Onix',           'db_description' => 'Seguro Onix'],
-        'CARTOES CAIXA VISA PF'        => ['label' => 'Pagamento Cartão Caixa','db_description' => null],
-        'Pagamento de fatura'          => ['label' => 'Pagamento Fatura Nubank','db_description' => null],
-    ];
-
-    public function handle(): int
+    public function handle(StatementClassifier $classifier): int
     {
         $file = storage_path('app/private/' . $this->argument('file'));
 
@@ -142,7 +123,7 @@ class ImportVariableExpenses extends Command
             }
 
             // Verifica se é recebimento de salário (apenas confirma, não cria receita variável)
-            if ($amount > 0 && $this->matchSalary($descricao)) {
+            if ($amount > 0 && $classifier->isSalary($descricao)) {
                 $salary   = Salary::where('effective_from', '<=', $date)->orderByDesc('effective_from')->first();
                 $actual   = $amount;
                 $expected = $salary?->amount ?? 0;
@@ -161,7 +142,7 @@ class ImportVariableExpenses extends Command
             }
 
             // Verifica se é um gasto fixo conhecido
-            $fixedMatch = $this->matchFixedExpense($descricao);
+            $fixedMatch = $classifier->matchFixedExpense($descricao);
             if ($fixedMatch !== null) {
                 ['label' => $label, 'db_description' => $dbDescription] = $fixedMatch;
 
@@ -235,24 +216,4 @@ class ImportVariableExpenses extends Command
         return self::SUCCESS;
     }
 
-    private function matchFixedExpense(string $description): ?array
-    {
-        foreach ($this->fixedExpensePatterns as $pattern => $config) {
-            if (stripos($description, $pattern) !== false) {
-                return $config;
-            }
-        }
-        return null;
-    }
-
-    private function matchSalary(string $description): bool
-    {
-        foreach ($this->salaryPatterns as $pattern) {
-            if (stripos($description, $pattern) !== false) {
-                return true;
-            }
-        }
-
-        return false;
-    }
 }

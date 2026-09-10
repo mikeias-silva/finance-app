@@ -5,8 +5,8 @@
 @push('styles')
 <style>
     .preview-box {
-        background: #f8fafc;
-        border: 1px solid #e2e8f0;
+        background: var(--surface-hover);
+        border: 1px solid var(--card-border);
         border-radius: 10px;
         padding: 16px;
     }
@@ -15,12 +15,12 @@
         justify-content: space-between;
         align-items: center;
         padding: 6px 0;
-        border-bottom: 1px solid #f1f5f9;
+        border-bottom: 1px solid var(--surface-alt);
         font-size: 13px;
     }
     .preview-installment:last-child { border-bottom: none; }
     .preview-empty {
-        color: #94a3b8;
+        color: var(--text-muted);
         font-size: 13px;
         text-align: center;
         padding: 12px 0;

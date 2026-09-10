@@ -29,6 +29,24 @@ class BillingPeriod
         ];
     }
 
+    /**
+     * O ciclo em que um dia está — por padrão, hoje.
+     *
+     * Não basta olhar o mês do calendário: passado o penúltimo dia útil, o mês já
+     * corre no ciclo seguinte. E entre o fim de um ciclo e o começo do outro sobram
+     * dias soltos (o fim de semana antes do último dia útil); esses valem como o
+     * ciclo prestes a começar.
+     */
+    public static function current(?Carbon $day = null): array
+    {
+        $day = ($day ?? Carbon::today())->copy()->startOfDay();
+        $period = self::for($day->copy()->startOfMonth());
+
+        return $day->lte($period['end'])
+            ? $period
+            : self::for($day->copy()->startOfMonth()->addMonthNoOverflow());
+    }
+
     /** Último dia útil (seg–sex, excluindo feriados nacionais) de um mês. */
     public static function lastBusinessDay(Carbon $month): Carbon
     {

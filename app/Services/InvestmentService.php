@@ -24,7 +24,7 @@ class InvestmentService
             $cdiRate = $this->getCdiRateAt($transaction->transacted_at);
             $adjRate = $cdiRate * ($box->rate_percentage / 100) / 100;
             $dailyRate = pow(1 + $adjRate, 1 / 252) - 1;
-            $days = $transaction->transacted_at->diffInDays($today);
+            $days = $this->businessDaysBetween($transaction->transacted_at, $today);
 
             $transactionYield = $transaction->amount * (pow(1 + $dailyRate, $days) - 1);
 
@@ -50,6 +50,30 @@ class InvestmentService
         }
 
         return max(0.0, $box->max_amount - $this->currentBalance($box));
+    }
+
+    /**
+     * Dias úteis entre duas datas. A taxa diária é derivada da convenção de 252
+     * dias úteis por ano, então contar dias corridos superestima o rendimento
+     * em cerca de 45% (365/252).
+     */
+    private function businessDaysBetween(Carbon $from, Carbon $to): int
+    {
+        $days = 0;
+        $cursor = $from->copy()->startOfDay();
+        $holidays = [];
+
+        while ($cursor->lt($to)) {
+            $holidays[$cursor->year] ??= BillingPeriod::holidays($cursor->year);
+
+            if (BillingPeriod::isBusinessDay($cursor, $holidays[$cursor->year])) {
+                $days++;
+            }
+
+            $cursor->addDay();
+        }
+
+        return $days;
     }
 
     private function getCdiRateAt(Carbon $date): float

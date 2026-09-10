@@ -12,7 +12,7 @@
     .progress-thin {
         height: 6px;
         border-radius: 10px;
-        background: #f1f5f9;
+        background: var(--surface-alt);
     }
     .legend-dot {
         width: 10px; height: 10px;
@@ -25,7 +25,7 @@
         align-items: center;
         justify-content: space-between;
         padding: 7px 0;
-        border-bottom: 1px solid #f1f5f9;
+        border-bottom: 1px solid var(--surface-alt);
         font-size: 13px;
     }
     .purchase-row-sm:last-child { border-bottom: none; }
@@ -35,7 +35,7 @@
         transition: background-color .2s ease;
     }
     .card-badge-btn:hover {
-        background: #e2e8f0;
+        background: var(--card-border);
     }
 </style>
 @endpush
@@ -43,7 +43,7 @@
 @section('content')
 
 {{-- Cabeçalho --}}
-<div class="d-flex align-items-center justify-content-between mb-4">
+<div class="d-flex align-items-center justify-content-between mb-4 gap-3 flex-wrap">
     <div>
         <h1 class="h5  mb-0">Projeção financeira</h1>
         <p class="text-muted small mb-0 mt-1">
@@ -51,6 +51,8 @@
         </p>
     </div>
     <div class="d-flex align-items-center gap-2">
+        @include('partials.nubank-import-button')
+
         <label class="text-muted small fw-medium me-1 mb-0">Horizonte:</label>
         <div class="btn-group btn-group-sm" role="group">
             @foreach([3, 6, 12] as $m)
@@ -63,6 +65,8 @@
     </div>
 </div>
 
+@include('partials.nubank-import-result')
+
 {{-- Cards de resumo do mês atual --}}
 @php $current = $projection->first(); @endphp
 @if($current)
@@ -72,7 +76,7 @@
             <div class="stat-icon"><i class="bi bi-cash-stack"></i></div>
             <div class="stat-label">Receita este mês</div>
             <div class="stat-value">
-                R${{ number_format($current['salary'] + $current['variable_income']->sum('amount'), 0, ',', '.') }}
+                R${{ number_format($current['salary'] + $current['variable_income']->sum('amount') + $current['recurring_income']->sum('amount'), 0, ',', '.') }}
             </div>
         </div>
     </div>
@@ -108,216 +112,20 @@
 </div>
 @endif
 
-{{-- Projeção mês a mês --}}
-<div class="row g-4">
 
-    {{-- Coluna principal: cards de projeção --}}
-    <div class="col-lg-8">
-        <div class="card">
-            <div class="card-header d-flex align-items-center justify-content-between">
-                <span><i class="bi bi-calendar3 me-2 text-muted"></i>Projeção mês a mês</span>
-            </div>
-            <div class="card-body p-0">
-                @php
-                    $maxExpense = $projection->max(fn($m) =>
-                        $m['card_expenses']->sum('amount') + $m['fixed_expenses']->sum('amount') + $m['variable_expenses']->sum('amount')
-                    );
-                @endphp
-
-                @foreach($projection as $yearMonth => $data)
-                @php
-                    $income  = $data['salary'] + $data['variable_income']->sum('amount');
-                    $expense = $data['card_expenses']->sum('amount') + $data['fixed_expenses']->sum('amount') + $data['variable_expenses']->sum('amount');
-                    $balance = $data['balance'];
-                    $pct     = $maxExpense > 0 ? round(($expense / $maxExpense) * 100) : 0;
-                    $isFirst = $loop->first;
-                    $monthPayload = [
-                        'year_month'        => $yearMonth,
-                        'month_label'       => $data['month']->translatedFormat('F Y'),
-                        'salary'            => $data['salary'],
-                        'variable_income'   => $data['variable_income']->values(),
-                        'card_expenses'     => $data['card_expenses']->values(),
-                        'fixed_expenses'    => $data['fixed_expenses']->values(),
-                        'variable_expenses' => $data['variable_expenses']->values(),
-                        'balance'           => $balance,
-                    ];
-                @endphp
-                <div class="px-4 py-3 {{ !$loop->last ? 'border-bottom' : '' }} {{ $isFirst ? 'bg-light bg-opacity-50' : '' }}">
-                    <div class="d-flex align-items-start justify-content-between mb-2">
-                        <div style="flex:1;min-width:0;">
-                            <div class="d-flex align-items-center gap-2">
-                                <span class="text-capitalize" style="font-size:14px;">
-                                    {{ $data['month']->translatedFormat('F Y') }}
-                                    @if($isFirst)
-                                        <span class="badge bg-secondary ms-1" style="font-size:10px;vertical-align:middle;">atual</span>
-                                    @endif
-                                </span>
-                                <button type="button"
-                                        class="btn btn-sm btn-outline-secondary py-0 px-2"
-                                        style="font-size:11px;border-radius:6px;"
-                                        title="Ver detalhes de {{ $data['month']->translatedFormat('F Y') }}"
-                                        data-bs-toggle="modal"
-                                        data-bs-target="#monthDetailModal"
-                                        data-month='@json($monthPayload)'>
-                                    <i class="bi bi-list-ul me-1"></i>detalhes
-                                </button>
-                            </div>
-                            <div class="text-muted mt-1" style="font-size:11px;">
-                                <i class="bi bi-calendar2-range me-1"></i>
-                                {{ $data['period_start']->translatedFormat('d M') }}
-                                –
-                                {{ $data['period_end']->translatedFormat('d M') }}
-                            </div>
-                            <div class="d-flex gap-3 mt-1">
-                                <span class="small text-muted">
-                                    <i class="bi bi-arrow-up text-success"></i>
-                                    R${{ number_format($income, 2, ',', '.') }}
-                                </span>
-                                <span class="small text-muted">
-                                    <i class="bi bi-arrow-down text-danger"></i>
-                                    R${{ number_format($expense, 2, ',', '.') }}
-                                </span>
-                            </div>
-                        </div>
-                        <div class="text-end">
-                            <div class="" style="font-family:'DM Mono',monospace;font-size:15px;color:{{ $balance >= 0 ? 'var(--green)' : 'var(--red)' }}">
-                                {{ $balance >= 0 ? '+' : '' }}R${{ number_format($balance, 2, ',', '.') }}
-                            </div>
-                            <div class="small text-muted">saldo</div>
-                        </div>
-                    </div>
-
-                    {{-- Barra de gastos --}}
-                    <div class="progress-thin">
-                        <div class="bg-{{ $balance >= 0 ? 'success' : 'danger' }} rounded"
-                             style="height:6px;width:{{ $pct }}%;transition:width .4s ease;"></div>
-                    </div>
-
-                    {{-- Faturas por cartão --}}
-                    @if($data['card_expenses']->count() > 0)
-                    <div class="d-flex flex-wrap gap-1 mt-2">
-                        @foreach($data['card_expenses']->groupBy('card') as $cardName => $items)
-                            <button type="button"
-                                    class="card-badge card-badge-btn"
-                                    title="Fatura {{ $cardName }}"
-                                    data-bs-toggle="modal"
-                                    data-bs-target="#cardExpensesModal"
-                                    data-card-name="{{ $cardName }}"
-                                    data-month-label="{{ $data['month']->translatedFormat('F Y') }}"
-                                    data-items='@json($items->values())'>
-                                <span class="dot" style="background:{{ $items->first()['color'] ?? '#94a3b8' }}"></span>
-                                {{ $cardName }}
-                                <strong>R${{ number_format($items->sum('amount'), 0, ',', '.') }}</strong>
-                            </button>
-                        @endforeach
-                    </div>
-                    @endif
-                </div>
-                @endforeach
-            </div>
-        </div>
-    </div>
-
-    {{-- Coluna lateral: detalhes do mês atual --}}
-    <div class="col-lg-4">
-
-        {{-- Gastos fixos --}}
-        <div class="card mb-3">
-            <div class="card-header">
-                <i class="bi bi-receipt me-2 text-muted"></i>Gastos fixos
-            </div>
-            <div class="card-body py-2 px-3">
-                @if($current && $current['fixed_expenses']->count() > 0)
-                    @foreach($current['fixed_expenses'] as $expense)
-                    <div class="purchase-row-sm">
-                        <span class="text-truncate me-2" style="max-width:60%">{{ $expense['description'] }}</span>
-                        <span class="fw-medium" style="font-family:'DM Mono',monospace;">
-                            R${{ number_format($expense['amount'], 2, ',', '.') }}
-                        </span>
-                    </div>
-                    @endforeach
-                    <div class="d-flex justify-content-between pt-2 mt-1 border-top">
-                        <span class="small  text-muted">Total</span>
-                        <span class="" style="font-family:'DM Mono',monospace;">
-                            R${{ number_format($current['fixed_expenses']->sum('amount'), 2, ',', '.') }}
-                        </span>
-                    </div>
-                @else
-                    <p class="text-muted small py-2 mb-0">Nenhum gasto fixo cadastrado.</p>
-                @endif
-            </div>
-        </div>
-
-        {{-- Compras parceladas este mês --}}
-        <div class="card">
-            <div class="card-header d-flex align-items-center justify-content-between">
-                <span><i class="bi bi-credit-card me-2 text-muted"></i>Parcelas por mês</span>
-                <div class="d-flex align-items-center gap-2">
-                    <form method="GET" action="{{ route('dashboard') }}" class="d-flex align-items-center gap-2">
-                        <input type="hidden" name="months" value="{{ $months }}">
-                        <select name="installments_month" class="form-select form-select-sm" onchange="this.form.submit()">
-                            @foreach($projection as $yearMonth => $data)
-                                <option value="{{ $yearMonth }}" @selected($installmentsMonth === $yearMonth)>
-                                    {{ $data['month']->translatedFormat('M/Y') }}
-                                </option>
-                            @endforeach
-                        </select>
-                    </form>
-                    <a href="{{ route('purchases.create') }}" class="btn btn-sm btn-primary">
-                        <i class="bi bi-plus"></i>
-                    </a>
-                </div>
-            </div>
-            <div class="card-body py-2 px-3">
-                @if($selectedInstallmentsMonth && $selectedInstallmentsMonth['card_expenses']->count() > 0)
-                    @foreach($selectedInstallmentsMonth['card_expenses'] as $item)
-                        <div class="purchase-row-sm">
-                            <div class="d-flex align-items-center gap-2" style="min-width:0;flex:1;">
-                                <span class="legend-dot flex-shrink-0" style="background:{{ $item['color'] ?? '#94a3b8' }}"></span>
-                                <span class="text-truncate small">{{ $item['description'] }}</span>
-                                @if($item['is_recurring'])
-                                    <span class="badge bg-warning text-dark flex-shrink-0" style="font-size:10px;">
-                            <i class="bi bi-arrow-repeat"></i>
-                        </span>
-                                @else
-                                    <span class="badge bg-light text-muted border flex-shrink-0" style="font-size:10px;">
-                            {{ $item['current_installment'] }}/{{ $item['installments'] }}
-                        </span>
-                                @endif
-                            </div>
-                            <span class="fw-medium flex-shrink-0 ms-2" style="font-family:'DM Mono',monospace;font-size:12px;">
-                    R${{ number_format($item['amount'], 2, ',', '.') }}
-                </span>
-                        </div>
-                    @endforeach
-
-                    <div class="d-flex justify-content-between pt-2 mt-1 border-top">
-                        <span class="small  text-muted">Total faturas</span>
-                        <span class="" style="font-family:'DM Mono',monospace;font-size:13px;">
-                    R${{ number_format($selectedInstallmentsMonth['card_expenses']->sum('amount'), 2, ',', '.') }}
-                </span>
-                    </div>
-                @else
-                    <p class="text-muted small py-2 mb-0">Nenhuma parcela neste mês.</p>
-                @endif
-            </div>
-        </div>
-
-    </div>
-</div>
 
 {{-- Acúmulo de saldo mês a mês --}}
 @php
-    $accumulated = $totalWithYield ?? 0;
+    // O acumulado vem do ProjectionService::accumulate(), ancorado no saldo real de hoje.
     $accumulatedData = [];
     foreach ($projection as $yearMonth => $data) {
-        $accumulated += $data['saldo_cc'];
         $accumulatedData[$yearMonth] = [
             'month'       => $data['month'],
             'balance'     => $data['balance'],
             'saldo_cc'    => $data['saldo_cc'],
             'rdb_net'     => $data['rdb_net'],
-            'accumulated' => $accumulated,
+            'pending'     => $data['pending'],
+            'accumulated' => $data['accumulated'],
         ];
     }
     $maxAcc = collect($accumulatedData)->max(fn($d) => abs($d['accumulated']));
@@ -333,7 +141,7 @@
             @foreach($accumulatedData as $yearMonth => $d)
             @php
                 $pct   = $maxAcc > 0 ? min(100, round((abs($d['accumulated']) / $maxAcc) * 100)) : 0;
-                $color = $d['accumulated'] >= 0 ? 'var(--green, #22c55e)' : 'var(--red, #ef4444)';
+                $color = $d['accumulated'] >= 0 ? 'var(--green-text)' : 'var(--red-text)';
                 $isFirst = $loop->first;
             @endphp
             <div class="d-flex flex-column align-items-center flex-shrink-0" style="min-width:72px;">
@@ -359,7 +167,7 @@
                 <div class="col-6 col-md-4 col-lg-2">
                     <div class="d-flex flex-column" style="font-size:12px;">
                         <span class="text-muted text-capitalize ">{{ $d['month']->translatedFormat('M/Y') }}</span>
-                        <span style="color:{{ $d['saldo_cc'] >= 0 ? 'var(--green,#22c55e)' : 'var(--red,#ef4444)' }};">
+                        <span style="color:{{ $d['saldo_cc'] >= 0 ? 'var(--green-text)' : 'var(--red-text)' }};">
                             C/C: {{ $d['saldo_cc'] >= 0 ? '+' : '' }}R${{ number_format($d['saldo_cc'], 0, ',', '.') }}
                         </span>
                         @if($d['rdb_net'] != 0)
@@ -367,7 +175,7 @@
                             RDB: {{ $d['rdb_net'] > 0 ? '-' : '+' }}R${{ number_format(abs($d['rdb_net']), 0, ',', '.') }}
                         </span>
                         @endif
-                        <span class="" style="color:{{ $d['accumulated'] >= 0 ? 'var(--green,#22c55e)' : 'var(--red,#ef4444)' }};">
+                        <span class="" style="color:{{ $d['accumulated'] >= 0 ? 'var(--green-text)' : 'var(--red-text)' }};">
                             Acum.: {{ $d['accumulated'] >= 0 ? '+' : '' }}R${{ number_format($d['accumulated'], 0, ',', '.') }}
                         </span>
                     </div>
@@ -394,7 +202,7 @@
             <div class="col-4">
                 <div class="d-flex flex-column">
                     <span class="text-muted" style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.6px;">Total investido</span>
-                    <span style="font-family:'DM Mono',monospace;font-size:18px;color:var(--blue);">
+                    <span style="font-family:'DM Mono',monospace;font-size:18px;color: var(--blue-text);">
                         R${{ number_format($totalInvested, 2, ',', '.') }}
                     </span>
                 </div>
@@ -402,7 +210,7 @@
             <div class="col-4">
                 <div class="d-flex flex-column">
                     <span class="text-muted" style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.6px;">Rendimento acumulado</span>
-                    <span style="font-family:'DM Mono',monospace;font-size:18px;color:var(--green);">
+                    <span style="font-family:'DM Mono',monospace;font-size:18px;color: var(--green-text);">
                         +R${{ number_format($totalYield, 2, ',', '.') }}
                     </span>
                 </div>
@@ -428,7 +236,7 @@
                             <span class="rounded-circle" style="width:10px;height:10px;background:{{ $box->color }};display:inline-block;flex-shrink:0;"></span>
                             <span class="" style="font-size:13px;">{{ $box->name }}</span>
                         </div>
-                        <span class="badge" style="background:{{ $box->color }}20;color:{{ $box->color }};font-size:10px;">
+                        <span class="badge" style="background:{{ $box->color }}20;color:var(--text-primary);font-size:10px;">
                             {{ number_format($box->rate_percentage, 0) }}% CDI
                         </span>
                     </div>
@@ -442,7 +250,7 @@
                         </div>
                         <div class="text-end">
                             <div class="text-muted" style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;">Rendimento</div>
-                            <div style="font-family:'DM Mono',monospace;font-size:13px;color:var(--green);">
+                            <div style="font-family:'DM Mono',monospace;font-size:13px;color: var(--green-text);">
                                 +R${{ number_format($item['yield'], 2, ',', '.') }}
                             </div>
                         </div>
@@ -461,7 +269,7 @@
                             <span style="font-size:10px;color:var(--text-muted);">Capacidade usada</span>
                             <span style="font-size:10px;color:var(--text-muted);font-family:'DM Mono',monospace;">{{ $pct }}% · R${{ number_format($box->max_amount - $item['balance'], 0, ',', '.') }} livre</span>
                         </div>
-                        <div style="height:5px;background:#e2e8f0;border-radius:999px;overflow:hidden;">
+                        <div style="height:5px;background:var(--card-border);border-radius:999px;overflow:hidden;">
                             <div style="height:100%;width:{{ $pct }}%;background:{{ $box->color }};border-radius:999px;transition:width .4s ease;"></div>
                         </div>
                     </div>
@@ -475,6 +283,228 @@
 </div>
 @endif
 
+{{-- Projeção mês a mês --}}
+<div class="row g-4 mt-1">
+
+    {{-- Coluna principal: cards de projeção --}}
+    <div class="col-lg">
+        <div class="card">
+            <div class="card-header d-flex align-items-center justify-content-between">
+                <span><i class="bi bi-calendar3 me-2 text-muted"></i>Projeção mês a mês</span>
+
+                {{-- O acumulado vale o quanto o saldo que o ancora é recente: ele vem
+                     da última importação, não de uma consulta ao abrir a tela. --}}
+                @if($balanceSnapshot)
+                    <span class="text-muted" style="font-size:11px;">
+                        <i class="bi bi-broadcast-pin me-1"></i>ancorado em
+                        R${{ number_format($balanceSnapshot->total, 2, ',', '.') }}
+                        <span class="{{ $balanceSnapshot->synced_at->isToday() ? '' : 'text-warning' }}">
+                            lido em {{ $balanceSnapshot->synced_at->translatedFormat('d/m \à\s H:i') }}
+                        </span>
+                    </span>
+                @else
+                    <span class="text-warning" style="font-size:11px;">
+                        <i class="bi bi-exclamation-triangle me-1"></i>saldo real nunca importado
+                    </span>
+                @endif
+            </div>
+            <div class="card-body p-0">
+                @php
+                    $maxExpense = $projection->max(fn($m) =>
+                        $m['card_expenses']->sum('amount') + $m['fixed_expenses']->sum('amount') + $m['variable_expenses']->sum('amount')
+                    );
+                @endphp
+
+                @foreach($projection as $yearMonth => $data)
+                    @php
+                        $income  = $data['salary']
+                            + $data['variable_income']->sum('amount')
+                            + $data['recurring_income']->sum('amount');
+                        $expense = $data['card_expenses']->sum('amount') + $data['fixed_expenses']->sum('amount') + $data['variable_expenses']->sum('amount');
+                        $balance = $data['balance'];
+                        $pct     = $maxExpense > 0 ? round(($expense / $maxExpense) * 100) : 0;
+                        $isFirst = $loop->first;
+                        $monthPayload = [
+                            'year_month'        => $yearMonth,
+                            'month_label'       => $data['month']->translatedFormat('F Y'),
+                            'salary'            => $data['salary'],
+                            'variable_income'   => $data['variable_income']->values(),
+                            'recurring_income'  => $data['recurring_income']->values(),
+                            'card_expenses'     => $data['card_expenses']->values(),
+                            'fixed_expenses'    => $data['fixed_expenses']->values(),
+                            'variable_expenses' => $data['variable_expenses']->values(),
+                            'balance'           => $balance,
+                        ];
+                    @endphp
+                    <div class="px-4 py-3 {{ !$loop->last ? 'border-bottom' : '' }} {{ $isFirst ? 'bg-light bg-opacity-50' : '' }}">
+                        <div class="d-flex align-items-start justify-content-between mb-2">
+                            <div style="flex:1;min-width:0;">
+                                <div class="d-flex align-items-center gap-2">
+                                <span class="text-capitalize" style="font-size:14px;">
+                                    {{ $data['month']->translatedFormat('F Y') }}
+                                    @if($isFirst)
+                                        <span class="badge bg-secondary ms-1" style="font-size:10px;vertical-align:middle;">atual</span>
+                                    @endif
+                                </span>
+                                    <button type="button"
+                                            class="btn btn-sm btn-outline-secondary py-0 px-2"
+                                            style="font-size:11px;border-radius:6px;"
+                                            title="Ver detalhes de {{ $data['month']->translatedFormat('F Y') }}"
+                                            data-bs-toggle="modal"
+                                            data-bs-target="#monthDetailModal"
+                                            data-month='@json($monthPayload)'>
+                                        <i class="bi bi-list-ul me-1"></i>detalhes
+                                    </button>
+                                </div>
+                                <div class="text-muted mt-1" style="font-size:11px;">
+                                    <i class="bi bi-calendar2-range me-1"></i>
+                                    {{ $data['period_start']->translatedFormat('d M') }}
+                                    –
+                                    {{ $data['period_end']->translatedFormat('d M') }}
+                                </div>
+                                <div class="d-flex gap-3 mt-1">
+                                <span class="small text-muted">
+                                    <i class="bi bi-arrow-up text-success"></i>
+                                    R${{ number_format($income, 2, ',', '.') }}
+                                </span>
+                                    <span class="small text-muted">
+                                    <i class="bi bi-arrow-down text-danger"></i>
+                                    R${{ number_format($expense, 2, ',', '.') }}
+                                </span>
+                                </div>
+                            </div>
+                            <div class="text-end">
+                                <div class="" style="font-family:'DM Mono',monospace;font-size:15px;color:{{ $balance >= 0 ? 'var(--green-text)' : 'var(--red-text)' }}">
+                                    {{ $balance >= 0 ? '+' : '' }}R${{ number_format($balance, 2, ',', '.') }}
+                                </div>
+                                <div class="small text-muted">saldo</div>
+
+                                {{-- O saldo acima é só deste ciclo; o acumulado carrega a
+                                     sobra de todos os meses anteriores, ancorada no saldo real de hoje. --}}
+                                <div class="mt-1" style="font-family:'DM Mono',monospace;font-size:12px;color:{{ $data['accumulated'] >= 0 ? 'var(--green-text)' : 'var(--red-text)' }};">
+                                    {{ $data['accumulated'] >= 0 ? '+' : '' }}R${{ number_format($data['accumulated'], 2, ',', '.') }}
+                                </div>
+                                <div class="text-muted" style="font-size:10px;">acumulado</div>
+                            </div>
+                        </div>
+
+                        {{-- Barra de gastos --}}
+                        <div class="progress-thin">
+                            <div class="bg-{{ $balance >= 0 ? 'success' : 'danger' }} rounded"
+                                 style="height:6px;width:{{ $pct }}%;transition:width .4s ease;"></div>
+                        </div>
+
+                        {{-- Faturas por cartão --}}
+                        <div class="d-flex flex-wrap gap-1 mt-2">
+                            @foreach($data['card_expenses']->groupBy('card') as $cardName => $items)
+                                <button type="button"
+                                        class="card-badge card-badge-btn"
+                                        title="Fatura {{ $cardName }}"
+                                        data-bs-toggle="modal"
+                                        data-bs-target="#cardExpensesModal"
+                                        data-card-name="{{ $cardName }}"
+                                        data-month-label="{{ $data['month']->translatedFormat('F Y') }}"
+                                        data-items='@json($items->values())'>
+                                    <span class="dot" style="background:{{ $items->first()['color'] ?? '#94a3b8' }}"></span>
+                                    {{ $cardName }}
+                                    <strong>R${{ number_format($items->sum('amount'), 0, ',', '.') }}</strong>
+                                </button>
+                            @endforeach
+
+                        </div>
+                    </div>
+                @endforeach
+            </div>
+        </div>
+    </div>
+
+    {{-- Coluna lateral: detalhes do mês atual --}}
+    {{--    <div class="col-lg-4">--}}
+
+    {{--        --}}{{-- Gastos fixos --}}
+    {{--        <div class="card mb-3">--}}
+    {{--            <div class="card-header">--}}
+    {{--                <i class="bi bi-receipt me-2 text-muted"></i>Gastos fixos--}}
+    {{--            </div>--}}
+    {{--            <div class="card-body py-2 px-3">--}}
+    {{--                @if($current && $current['fixed_expenses']->count() > 0)--}}
+    {{--                    @foreach($current['fixed_expenses'] as $expense)--}}
+    {{--                    <div class="purchase-row-sm">--}}
+    {{--                        <span class="text-truncate me-2" style="max-width:60%">{{ $expense['description'] }}</span>--}}
+    {{--                        <span class="fw-medium" style="font-family:'DM Mono',monospace;">--}}
+    {{--                            R${{ number_format($expense['amount'], 2, ',', '.') }}--}}
+    {{--                        </span>--}}
+    {{--                    </div>--}}
+    {{--                    @endforeach--}}
+    {{--                    <div class="d-flex justify-content-between pt-2 mt-1 border-top">--}}
+    {{--                        <span class="small  text-muted">Total</span>--}}
+    {{--                        <span class="" style="font-family:'DM Mono',monospace;">--}}
+    {{--                            R${{ number_format($current['fixed_expenses']->sum('amount'), 2, ',', '.') }}--}}
+    {{--                        </span>--}}
+    {{--                    </div>--}}
+    {{--                @else--}}
+    {{--                    <p class="text-muted small py-2 mb-0">Nenhum gasto fixo cadastrado.</p>--}}
+    {{--                @endif--}}
+    {{--            </div>--}}
+    {{--        </div>--}}
+
+    {{--        --}}{{-- Compras parceladas este mês --}}
+    {{--        <div class="card">--}}
+    {{--            <div class="card-header d-flex align-items-center justify-content-between">--}}
+    {{--                <span><i class="bi bi-credit-card me-2 text-muted"></i>Parcelas por mês</span>--}}
+    {{--                <div class="d-flex align-items-center gap-2">--}}
+    {{--                    <form method="GET" action="{{ route('dashboard') }}" class="d-flex align-items-center gap-2">--}}
+    {{--                        <input type="hidden" name="months" value="{{ $months }}">--}}
+    {{--                        <select name="installments_month" class="form-select form-select-sm" onchange="this.form.submit()">--}}
+    {{--                            @foreach($projection as $yearMonth => $data)--}}
+    {{--                                <option value="{{ $yearMonth }}" @selected($installmentsMonth === $yearMonth)>--}}
+    {{--                                    {{ $data['month']->translatedFormat('M/Y') }}--}}
+    {{--                                </option>--}}
+    {{--                            @endforeach--}}
+    {{--                        </select>--}}
+    {{--                    </form>--}}
+    {{--                    <a href="{{ route('purchases.create') }}" class="btn btn-sm btn-primary">--}}
+    {{--                        <i class="bi bi-plus"></i>--}}
+    {{--                    </a>--}}
+    {{--                </div>--}}
+    {{--            </div>--}}
+    {{--            <div class="card-body py-2 px-3">--}}
+    {{--                @if($selectedInstallmentsMonth && $selectedInstallmentsMonth['card_expenses']->count() > 0)--}}
+    {{--                    @foreach($selectedInstallmentsMonth['card_expenses'] as $item)--}}
+    {{--                        <div class="purchase-row-sm">--}}
+    {{--                            <div class="d-flex align-items-center gap-2" style="min-width:0;flex:1;">--}}
+    {{--                                <span class="legend-dot flex-shrink-0" style="background:{{ $item['color'] ?? '#94a3b8' }}"></span>--}}
+    {{--                                <span class="text-truncate small">{{ $item['description'] }}</span>--}}
+    {{--                                @if($item['is_recurring'])--}}
+    {{--                                    <span class="badge bg-warning text-dark flex-shrink-0" style="font-size:10px;">--}}
+    {{--                            <i class="bi bi-arrow-repeat"></i>--}}
+    {{--                        </span>--}}
+    {{--                                @else--}}
+    {{--                                    <span class="badge bg-light text-muted border flex-shrink-0" style="font-size:10px;">--}}
+    {{--                            {{ $item['current_installment'] }}/{{ $item['installments'] }}--}}
+    {{--                        </span>--}}
+    {{--                                @endif--}}
+    {{--                            </div>--}}
+    {{--                            <span class="fw-medium flex-shrink-0 ms-2" style="font-family:'DM Mono',monospace;font-size:12px;">--}}
+    {{--                    R${{ number_format($item['amount'], 2, ',', '.') }}--}}
+    {{--                </span>--}}
+    {{--                        </div>--}}
+    {{--                    @endforeach--}}
+
+    {{--                    <div class="d-flex justify-content-between pt-2 mt-1 border-top">--}}
+    {{--                        <span class="small  text-muted">Total faturas</span>--}}
+    {{--                        <span class="" style="font-family:'DM Mono',monospace;font-size:13px;">--}}
+    {{--                    R${{ number_format($selectedInstallmentsMonth['card_expenses']->sum('amount'), 2, ',', '.') }}--}}
+    {{--                </span>--}}
+    {{--                    </div>--}}
+    {{--                @else--}}
+    {{--                    <p class="text-muted small py-2 mb-0">Nenhuma parcela neste mês.</p>--}}
+    {{--                @endif--}}
+    {{--            </div>--}}
+    {{--        </div>--}}
+
+    {{--    </div>--}}
+</div>
 {{-- Modal: detalhes completos do mês --}}
 <div class="modal fade" id="monthDetailModal" tabindex="-1" aria-hidden="true">
     <div class="modal-dialog modal-lg modal-dialog-scrollable">
@@ -516,13 +546,59 @@
     </div>
 </div>
 
+{{-- Fatura da Caixa juntando API e cadastro manual, sem duplicar --}}
+<div class="modal fade" id="mergedCardModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title mb-0" data-role="title">Fatura</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+            </div>
+            <div class="modal-body">
+                <p class="small text-muted mb-3" data-role="month"></p>
+                <div data-role="list" class="d-flex flex-column gap-2"></div>
+            </div>
+            <div class="modal-footer d-flex justify-content-between">
+                <span class="small  text-muted">Total</span>
+                <span class="" style="font-family:'DM Mono',monospace;" data-role="total">R$0,00</span>
+            </div>
+        </div>
+    </div>
+</div>
+
+{{-- Mesma fatura do cartão da Caixa, com os dados vindos da API do Pluggy --}}
+<div class="modal fade" id="pluggyCardModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title mb-0" data-role="title">Fatura</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+            </div>
+            <div class="modal-body">
+                <p class="small text-muted mb-3" data-role="month"></p>
+                <div data-role="list" class="d-flex flex-column gap-2"></div>
+            </div>
+            <div class="modal-footer d-flex justify-content-between">
+                <span class="small  text-muted">Total</span>
+                <span class="" style="font-family:'DM Mono',monospace;" data-role="total">R$0,00</span>
+            </div>
+        </div>
+    </div>
+</div>
+
 @endsection
 
 @push('scripts')
 <script>
     (() => {
         const money = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
-        const dateF = (d) => d ? new Date(d).toLocaleDateString('pt-BR', { day:'2-digit', month:'2-digit', year:'numeric' }) : '';
+        // "2026-08-31" sozinho o JS lê como meia-noite UTC e mostra em UTC-3 como
+        // 30/08 — um dia a menos em toda linha. O 'T00:00:00' força a leitura local.
+        const dateF = (d) => {
+            if (!d) return '';
+            const local = /^\d{4}-\d{2}-\d{2}$/.test(d) ? d + 'T00:00:00' : d;
+            return new Date(local).toLocaleDateString('pt-BR', { day:'2-digit', month:'2-digit', year:'numeric' });
+        };
 
         function makeRow(description, amount, extra = '') {
             return `<div class="purchase-row-sm">
@@ -570,6 +646,10 @@
                 incomeRows.push(makeRow('Salário', d.salary));
                 totalIncome += Number(d.salary);
             }
+            (d.recurring_income || []).forEach(i => {
+                incomeRows.push(makeRow(i.description, i.amount, dateF(i.received_at)));
+                totalIncome += Number(i.amount);
+            });
             (d.variable_income || []).forEach(i => {
                 incomeRows.push(makeRow(i.description, i.amount, dateF(i.received_at)));
                 totalIncome += Number(i.amount);
@@ -664,7 +744,8 @@
 
             const cardName = trigger.getAttribute('data-card-name') || 'Cartão';
             const monthLabel = trigger.getAttribute('data-month-label') || '';
-            const items = JSON.parse(trigger.getAttribute('data-items') || '[]');
+            const items = JSON.parse(trigger.getAttribute('data-items') || '[]')
+                .sort((a, b) => Number(a.amount || 0) - Number(b.amount || 0));
 
             titleEl.textContent = `Gastos no ${cardName}`;
             monthEl.textContent = monthLabel;
@@ -716,6 +797,132 @@
             });
 
             totalEl.textContent = money.format(total);
+        });
+    })();
+
+    // Os dois modais que leem da API compartilham a mesma renderização: mudam só
+    // o endpoint e o título. Origem "banco" ganha uma marca, para distinguir o que
+    // é antecipação manual do que a Caixa já publicou.
+    (() => {
+        const money = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
+
+        function installmentLabel(transaction) {
+            if (transaction.recurring) return 'recorrente';
+
+            const meta = transaction.creditCardMetadata || {};
+            return meta.installmentNumber
+                ? `${meta.installmentNumber}/${meta.totalInstallments}`
+                : '1/1';
+        }
+
+        function setupModal(id, { endpoint, title }) {
+            const modal = document.getElementById(id);
+            if (!modal) return;
+
+            const titleEl = modal.querySelector('[data-role="title"]');
+            const monthEl = modal.querySelector('[data-role="month"]');
+            const listEl = modal.querySelector('[data-role="list"]');
+            const totalEl = modal.querySelector('[data-role="total"]');
+
+            function message(text) {
+                listEl.innerHTML = '';
+                const p = document.createElement('p');
+                p.className = 'text-muted small mb-0';
+                p.textContent = text;
+                listEl.appendChild(p);
+                totalEl.textContent = money.format(0);
+            }
+
+            modal.addEventListener('show.bs.modal', async (event) => {
+                const trigger = event.relatedTarget;
+                if (!trigger) return;
+
+                const month = trigger.getAttribute('data-month');
+                const year = trigger.getAttribute('data-year');
+
+                titleEl.textContent = title;
+                monthEl.textContent = trigger.getAttribute('data-month-label') || '';
+                message('Consultando a API do Pluggy...');
+
+                try {
+                    const response = await fetch(`${endpoint}?month=${month}&year=${year}`, {
+                        headers: { 'Accept': 'application/json' },
+                    });
+                    const data = await response.json();
+
+                    if (!response.ok) {
+                        message(data.message || 'Não foi possível consultar a fatura.');
+                        return;
+                    }
+
+                    const items = (data.transactions || [])
+                        .slice()
+                        .sort((a, b) => Number(a.amount || 0) - Number(b.amount || 0));
+
+                    if (!items.length) {
+                        message('Sem gastos para este cartão no mês selecionado.');
+                        return;
+                    }
+
+                    listEl.innerHTML = '';
+                    let total = 0;
+
+                    items.forEach((item) => {
+                        total += Number(item.amount || 0);
+
+                        const row = document.createElement('div');
+                        row.className = 'purchase-row-sm';
+
+                        const left = document.createElement('div');
+                        left.className = 'd-flex align-items-center gap-2';
+
+                        const description = document.createElement('span');
+                        description.className = 'small';
+                        description.textContent = item.description || '-';
+
+                        const badge = document.createElement('span');
+                        badge.className = item.recurring
+                            ? 'badge bg-warning text-dark'
+                            : 'badge bg-light text-muted border';
+                        badge.style.fontSize = '10px';
+                        badge.textContent = installmentLabel(item);
+
+                        left.appendChild(description);
+                        left.appendChild(badge);
+
+                        if (item.from_db) {
+                            const origin = document.createElement('span');
+                            origin.className = 'badge';
+                            origin.style.cssText = 'font-size:9px;background:#7c3aed;';
+                            origin.textContent = 'banco';
+                            left.appendChild(origin);
+                        }
+
+                        const amount = document.createElement('span');
+                        amount.className = 'fw-medium';
+                        amount.style.fontFamily = "'DM Mono',monospace";
+                        amount.textContent = money.format(Number(item.amount || 0));
+
+                        row.appendChild(left);
+                        row.appendChild(amount);
+                        listEl.appendChild(row);
+                    });
+
+                    totalEl.textContent = money.format(total);
+                } catch (error) {
+                    message('Falha ao consultar a API do Pluggy.');
+                }
+            });
+        }
+
+        setupModal('pluggyCardModal', {
+            endpoint: '/accounts/caixa/credit-card/statement',
+            title: 'Gastos no Caixa - Visa (API Pluggy)',
+        });
+
+        setupModal('mergedCardModal', {
+            endpoint: '/accounts/caixa/credit-card/statement/merged',
+            title: 'Gastos no Caixa - Visa (API + banco)',
         });
     })();
 </script>
