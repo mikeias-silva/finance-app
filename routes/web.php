@@ -4,6 +4,8 @@ use App\Http\Controllers\AccountController;
 use App\Http\Controllers\CnisController;
 use App\Http\Controllers\CreditCardController;
 use App\Http\Controllers\CreditCardPurchaseController;
+use App\Http\Controllers\Dashboard2Controller;
+use App\Http\Controllers\Dashboard3Controller;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\FixedExmpenseController;
 use App\Http\Controllers\InvestmentController;
@@ -25,6 +27,12 @@ Route::post('/login', [LoginController::class, 'store'])
 Route::post('/logout', [LoginController::class, 'destroy'])->name('logout');
 
 Route::resource('/', DashboardController::class)->name('index', 'dashboard');
+
+// Segunda versão da tela inicial, lado a lado com a primeira até uma delas ser escolhida.
+Route::get('/dashboard2', [Dashboard2Controller::class, 'index'])->name('dashboard2');
+
+// Terceira versão: os mesmos números, em gráficos que se mexem sem recarregar a página.
+Route::get('/dashboard3', [Dashboard3Controller::class, 'index'])->name('dashboard3');
 
 Route::resource('/projection', ProjectionController::class);
 

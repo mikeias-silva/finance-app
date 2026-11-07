@@ -87,12 +87,15 @@ class CreditCardPurchaseController extends Controller
 
     private function validateData(Request $request): array
     {
-        return $request->validate([
+        $data = $request->validate([
             'credit_card_id' => ['required', 'exists:credit_cards,id'],
             'description' => ['required', 'string'],
             'total_amount' => ['required', 'numeric', 'min:0.01'],
             'installments' => ['required', 'integer', 'min:1', 'max:60'],
             'purchased_at' => ['required', 'date'],
         ]);
+
+        // Checkbox desmarcado não vem no formulário.
+        return $data + ['excluded_from_projection' => $request->boolean('excluded_from_projection')];
     }
 }

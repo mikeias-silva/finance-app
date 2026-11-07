@@ -198,3 +198,13 @@ discutidas, em ordem de segurança:
 2. **Magic link + remember cookie** (Laravel, URLs assinadas) — exige HTTPS para
    o cookie não trafegar legível. Sem domínio, dá para usar DuckDNS + Let's Encrypt.
 3. **Basic Auth no nginx** — mais simples, protege tudo de uma vez.
+
+## Importação diária do cartão Caixa
+
+Roda pelo cron do usuário `ubuntu`, às 16:30 UTC, depois da sincronização do Pluggy:
+
+```bash
+30 16 * * * cd /srv/finance-app && /usr/bin/docker compose -f docker-compose.prod.yml exec -T php php artisan import:pluggy-caixa-card >> /home/ubuntu/caixa-import.log 2>&1
+```
+
+Só entram compras de 01/10/2026 em diante. Para conferir sem gravar, use `--all --dry-run`.

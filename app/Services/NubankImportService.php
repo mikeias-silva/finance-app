@@ -40,12 +40,12 @@ class NubankImportService
         private readonly StatementClassifier $classifier,
         private readonly SalaryCredit $salaryCredit,
         private readonly InvestmentService $investments,
-    ) {
-    }
+        private readonly ThirdPartyReimbursement $reimbursement,
+    ) {}
 
     /**
      * @param  callable(NubankImportMessage): void|null  $onMessage  recebe cada linha do log
-     *                                                              no momento em que acontece
+     *                                                               no momento em que acontece
      *
      * @throws NubankImportException
      */
@@ -137,6 +137,7 @@ class NubankImportService
             // Caixinhas vêm do endpoint de investimentos, com a taxa real de cada posição.
             if ($this->classifier->isInvestmentMovement($description)) {
                 $this->result->investmentMovements++;
+
                 continue;
             }
 
@@ -151,6 +152,23 @@ class NubankImportService
                 if ($adjustment !== null) {
                     $candidates[] = $adjustment;
                 }
+
+                continue;
+            }
+
+            // A projeção já soma a receita recorrente em todo ciclo.
+            if ($this->salaryCredit->isRecurringIncome($transaction)) {
+                $this->result->confirmed++;
+                $this->line('  ✓ Receita recorrente confirmada: R$ '.$this->money($amount)." em {$date}");
+
+                continue;
+            }
+
+            // Devolução de compra feita para outra pessoa: a compra está fora dos
+            // cálculos, então este dinheiro também fica.
+            if ($this->reimbursement->matches($transaction)) {
+                $this->result->confirmed++;
+                $this->line('  ✓ Devolução de compra de terceiro: R$ '.$this->money($amount)." em {$date}");
 
                 continue;
             }
@@ -227,10 +245,19 @@ class NubankImportService
      * valor cheio a projeção já conta por conta própria, e importá-lo de novo
      * somaria o mesmo dinheiro duas vezes. Recebeu a mais, é receita variável;
      * a menos, despesa — mesmo tratamento dado às contas fixas.
+     *
+     * Receita recorrente pode cair no mesmo crédito. Ela só é descontada se a sobra
+     * a cobre inteira: abaixo disso, foi paga à parte e a sobra é ajuste de verdade.
      */
     private function salaryAdjustment(float $amount, string $date, string $identifier): ?array
     {
         $expected = (float) (Salary::where('effective_from', '<=', $date)->orderByDesc('effective_from')->first()?->amount ?? 0);
+        $recurring = $this->salaryCredit->recurringTotal($date);
+
+        if ($recurring > 0 && round($amount - $expected, 2) >= $recurring) {
+            $expected = round($expected + $recurring, 2);
+        }
+
         $diff = round($amount - $expected, 2);
 
         $this->result->salary = [
@@ -361,6 +388,7 @@ class NubankImportService
 
             if ($deficit <= 0) {
                 $this->result->skipped += count($group);
+
                 continue;
             }
 
@@ -437,6 +465,7 @@ class NubankImportService
 
             if (! isset($boxes[$rate])) {
                 $unknownRates[$rate] = ($unknownRates[$rate] ?? 0) + $balance;
+
                 continue;
             }
 
@@ -520,6 +549,7 @@ class NubankImportService
         foreach ($this->result->investmentBoxes as $box) {
             if ($box['matches']) {
                 $this->line("  ✓ {$box['name']}: R$ ".$this->money($box['database']));
+
                 continue;
             }
 

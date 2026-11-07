@@ -2,15 +2,15 @@
 
 namespace App\Services;
 
+use App\Models\CreditCard;
 use App\Models\CreditCardPurchase;
 use App\Models\FixedExpense;
+use App\Models\InvestmentTransaction;
 use App\Models\RecurringIncome;
 use App\Models\Salary;
 use App\Models\StatementPayment;
-use App\Services\CaixaBillService;
 use App\Models\VariableExpense;
 use App\Models\VariableIncome;
-use App\Services\BillingPeriod;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 
@@ -23,21 +23,20 @@ class ProjectionService
         $months = collect();
         $current = $from->copy()->startOfMonth();
 
-
         while ($current->lte($to)) {
             $period = BillingPeriod::for($current);
 
             $months->put($current->format('Y-m'), [  // put, não push
-                'month'         => $current->copy(),
-                'period_start'  => $period['start'],
-                'period_end'    => $period['end'],
+                'month' => $current->copy(),
+                'period_start' => $period['start'],
+                'period_end' => $period['end'],
                 'card_expenses' => $this->cardExpensesForMonth($current),
                 'fixed_expenses' => $this->fixedExpensesForMonth($current),
                 'salary' => $this->salaryForMonth($current),
                 'variable_income' => $this->variableIncomesForMonth($current),
                 'recurring_income' => $this->recurringIncomesForMonth($current),
                 'variable_expenses' => $this->variableExpensesForMonth($current),
-                'color' => 'gray' // default, será atualizado depois
+                'color' => 'gray', // default, será atualizado depois
             ]);
             $current->addMonth();
         }
@@ -46,12 +45,13 @@ class ProjectionService
             $total_expenses = $m['card_expenses']->sum('amount')
                 + $m['fixed_expenses']->sum('amount')
                 + $m['variable_expenses']->sum('amount');
-            $total_incomes  = $m['salary']
+            $total_incomes = $m['salary']
                 + $m['variable_income']->sum('amount')
                 + $m['recurring_income']->sum('amount');
-            $m['balance']   = $total_incomes - $total_expenses;
-            $m['rdb_net']   = $this->rdbNetForMonth($m['month']);
-            $m['saldo_cc']  = $m['balance'] - $m['rdb_net'];
+            $m['balance'] = $total_incomes - $total_expenses;
+            $m['rdb_net'] = $this->rdbNetForMonth($m['month']);
+            $m['saldo_cc'] = $m['balance'] - $m['rdb_net'];
+
             return $m;
         });
     }
@@ -121,6 +121,11 @@ class ProjectionService
                 return true;
             }
 
+            // O ajuste é a diferença de uma cobrança que a API já traz inteira.
+            if (CreditCardPurchase::isAdjustment($entry['description'])) {
+                return true;
+            }
+
             $amount = number_format((float) $entry['amount'], 2, '.', '');
             $key = ($entry['purchased_at'] ?? '').'|'.$amount.'|'.($entry['installments'] ?: 1);
 
@@ -146,15 +151,21 @@ class ProjectionService
     {
         $today = Carbon::today();
         $running = $anchor;
+        $investments = app(InvestmentService::class);
+        $boxes = $investments->yieldingBoxes();
 
-        return $projection->map(function (array $month) use (&$running, $today, $salaryCredited) {
+        return $projection->map(function (array $month) use (&$running, &$boxes, $today, $salaryCredited, $investments) {
             $isCurrentCycle = $today->betweenIncluded($month['period_start'], $month['period_end']);
 
             $month['pending'] = $isCurrentCycle
                 ? $this->pendingForCycle($month, $today, $salaryCredited)
                 : $month['balance'];
 
-            $running += $month['pending'];
+            // O ciclo corrente só rende daqui em diante: o que já rendeu está na âncora.
+            // Fica de fora do resultado do ciclo, que é o que entra menos o que sai.
+            $month['yield'] = $investments->accrue($boxes, $month['period_start']->max($today), $month['period_end']->copy()->addDay());
+
+            $running += $month['pending'] + $month['yield'];
             $month['accumulated'] = $running;
 
             return $month;
@@ -262,7 +273,8 @@ class ProjectionService
 
     public function cardExpensesForMonth(Carbon $month): Collection
     {
-        $purchases = CreditCardPurchase::with('creditCard')->get();
+        // Compra paga por outra pessoa fica registrada, mas fora de qualquer cálculo.
+        $purchases = CreditCardPurchase::with('creditCard')->where('excluded_from_projection', false)->get();
 
         // Modelo por data de cobrança:
         // Para cada parcela N, chargeDate = purchaseDate + N meses.
@@ -270,20 +282,22 @@ class ProjectionService
         // Na fatura "gorda" (ex: agosto cobre jun/2–jul/22), duas cobranças consecutivas
         // podem cair no mesmo mês de pagamento → a parcela aparece duas vezes.
         return $purchases->flatMap(function ($purchase) use ($month) {
-            $card         = $purchase->creditCard;
+            $card = $purchase->creditCard;
             $purchaseDate = Carbon::parse($purchase->purchased_at);
-            $skipMonths   = $card->billing_skip_months ?? [];
-            $entries      = [];
+            $skipMonths = $card->billing_skip_months ?? [];
+            $entries = [];
 
             if ($purchase->is_recurring) {
                 // Recorrente: itera meses de cobrança até ultrapassar o mês alvo.
                 // Aqui repetir na mesma fatura é correto — a assinatura é cobrada
                 // todo mês, e um ciclo longo abarca duas cobranças.
                 for ($k = 0; ; $k++) {
-                    $chargeDate   = $purchaseDate->copy()->addMonths($k);
+                    $chargeDate = $purchaseDate->copy()->addMonths($k);
                     $paymentMonth = $this->resolvePaymentMonth($chargeDate, $card, $skipMonths);
 
-                    if ($paymentMonth->gt($month)) break;
+                    if ($paymentMonth->gt($month)) {
+                        break;
+                    }
 
                     if ($paymentMonth->format('Y-m') === $month->format('Y-m')) {
                         $entries[] = $this->makeExpenseEntry($purchase, $card, $k + 1);
@@ -303,7 +317,7 @@ class ProjectionService
             } else {
                 // Parcelado: itera cada parcela pela sua data de cobrança real
                 for ($n = 0; $n < $purchase->installments; $n++) {
-                    $chargeDate   = $purchaseDate->copy()->addMonths($n);
+                    $chargeDate = $purchaseDate->copy()->addMonths($n);
                     $paymentMonth = $this->resolvePaymentMonth($chargeDate, $card, $skipMonths);
 
                     if ($paymentMonth->format('Y-m') === $month->format('Y-m')) {
@@ -325,7 +339,7 @@ class ProjectionService
      */
     private function caixaOccurrenceInMonth(
         CreditCardPurchase $purchase,
-        \App\Models\CreditCard $card,
+        CreditCard $card,
         Carbon $purchaseDate,
         Carbon $month,
     ): ?int {
@@ -333,8 +347,9 @@ class ProjectionService
         $index = 0;
 
         foreach ($this->caixaBillCycles($card, $purchaseDate, $installments) as $bill) {
-            if ($bill['closing']->lt($purchaseDate)) {
-                continue; // fatura já fechada quando a compra ocorreu
+            // Compra feita no dia do fechamento já cai na fatura seguinte.
+            if ($bill['closing']->lte($purchaseDate)) {
+                continue;
             }
 
             $index++;
@@ -356,7 +371,7 @@ class ProjectionService
      * Respeita a mudança de fechamento/vencimento (closing_changed_at) e os meses
      * sem fatura (billing_skip_months).
      */
-    private function caixaBillCycles(\App\Models\CreditCard $card, Carbon $purchaseDate, int $occurrences): array
+    private function caixaBillCycles(CreditCard $card, Carbon $purchaseDate, int $occurrences): array
     {
         $skip = $card->billing_skip_months ?? [];
         $changedAt = $card->closing_changed_at ? Carbon::parse($card->closing_changed_at) : null;
@@ -394,13 +409,14 @@ class ProjectionService
             ->filter(function ($e) use ($month) {
                 return is_null($e->valid_until) || $month->lte($e->valid_until->endOfMonth());
             })
-            ->map(fn($e) => ['description' => $e->description, 'amount' => $e->amount]);
+            ->map(fn ($e) => ['description' => $e->description, 'amount' => $e->amount]);
     }
 
     private function salaryForMonth(Carbon $month): float
     {
         $salary = Salary::where('effective_from', '<=', $month)
             ->orderByDesc('effective_from')->first();
+
         return $salary?->amount ?? 0;
 
     }
@@ -408,13 +424,14 @@ class ProjectionService
     public function variableExpensesForMonth(Carbon $month): Collection
     {
         $period = BillingPeriod::for($month);
+
         return VariableExpense::query()
             ->whereBetween('paid_at', [
                 $period['start']->toDateString(),
                 $period['end']->copy()->endOfDay(),
             ])
             ->get()
-            ->map(fn($e) => ['description' => $e->description, 'amount' => $e->amount, 'paid_at' => $e->paid_at, 'identifier' => $e->identifier]);
+            ->map(fn ($e) => ['description' => $e->description, 'amount' => $e->amount, 'paid_at' => $e->paid_at, 'identifier' => $e->identifier]);
     }
 
     public function variableIncomesForMonth(Carbon $month): Collection
@@ -427,7 +444,7 @@ class ProjectionService
                 $period['end']->copy()->endOfDay(),
             ])
             ->get()
-            ->map(fn($i) => ['description' => $i->description, 'amount' => $i->amount, 'received_at' => $i->received_at, 'identifier' => $i->identifier]);
+            ->map(fn ($i) => ['description' => $i->description, 'amount' => $i->amount, 'received_at' => $i->received_at, 'identifier' => $i->identifier]);
     }
 
     /**
@@ -440,12 +457,8 @@ class ProjectionService
     {
         $paymentDay = BillingPeriod::for($month)['start'];
 
-        return RecurringIncome::where('is_active', true)
-            // whereDate porque o cast `date` grava "Y-m-d 00:00:00": na estreia,
-            // comparar a coluna crua com a data pura deixaria o registro de fora.
-            ->whereDate('effective_from', '<=', $paymentDay->toDateString())
+        return RecurringIncome::paidOn($paymentDay)
             ->get()
-            ->filter(fn ($i) => is_null($i->valid_until) || $paymentDay->lte($i->valid_until))
             ->map(fn ($i) => [
                 'description' => $i->description,
                 'amount' => $i->amount,
@@ -458,12 +471,12 @@ class ProjectionService
     {
         $period = BillingPeriod::for($month);
 
-        $transactions = \App\Models\InvestmentTransaction::whereBetween('transacted_at', [
+        $transactions = InvestmentTransaction::whereBetween('transacted_at', [
             $period['start']->toDateString(),
             $period['end']->copy()->endOfDay(),
         ])->get();
 
-        $deposits    = $transactions->where('type', 'deposit')->sum('amount');
+        $deposits = $transactions->where('type', 'deposit')->sum('amount');
         $withdrawals = $transactions->where('type', 'withdrawal')->sum('amount');
 
         return (float) ($deposits - $withdrawals);
@@ -478,7 +491,7 @@ class ProjectionService
      * Resolve o mês de pagamento, avançando para o próximo mês disponível
      * caso o resultado caia num mês pulado (billing_skip_months).
      */
-    private function resolvePaymentMonth(Carbon $chargeDate, \App\Models\CreditCard $card, array $skipMonths): Carbon
+    private function resolvePaymentMonth(Carbon $chargeDate, CreditCard $card, array $skipMonths): Carbon
     {
         $paymentMonth = $this->resolveBillingMonth($chargeDate, $card);
 
@@ -491,36 +504,37 @@ class ProjectionService
 
     private function getPaymentMonths(Carbon $billingStart, int $installments, array $skipMonths): array
     {
-        $months  = [];
+        $months = [];
         $current = $billingStart->copy();
         while (count($months) < $installments) {
             $key = $current->format('Y-m');
-            if (!in_array($key, $skipMonths)) {
+            if (! in_array($key, $skipMonths)) {
                 $months[] = $key;
             }
             $current->addMonth();
         }
+
         return $months;
     }
 
-    private function makeExpenseEntry(\App\Models\CreditCardPurchase $purchase, \App\Models\CreditCard $card, int $currentInstallment): array
+    private function makeExpenseEntry(CreditCardPurchase $purchase, CreditCard $card, int $currentInstallment): array
     {
         return [
-            'description'         => $purchase->description,
-            'card'                => $card->name,
-            'color'               => $card->color,
-            'amount'              => $purchase->is_recurring
+            'description' => $purchase->description,
+            'card' => $card->name,
+            'color' => $card->color,
+            'amount' => $purchase->is_recurring
                 ? $purchase->total_amount
                 : round($purchase->total_amount / $purchase->installments, 2),
-            'is_recurring'        => $purchase->is_recurring,
-            'installments'        => $purchase->installments,
+            'is_recurring' => $purchase->is_recurring,
+            'installments' => $purchase->installments,
             'current_installment' => $currentInstallment,
             // Usado para casar com o lançamento equivalente na API do Pluggy.
-            'purchased_at'        => Carbon::parse($purchase->purchased_at)->toDateString(),
+            'purchased_at' => Carbon::parse($purchase->purchased_at)->toDateString(),
         ];
     }
 
-    private function resolveBillingMonth(Carbon $purchaseDate, \App\Models\CreditCard $card): Carbon
+    private function resolveBillingMonth(Carbon $purchaseDate, CreditCard $card): Carbon
     {
         // Sem histórico de mudança → fórmula simples
         if ($card->old_closing_day === null || $card->closing_changed_at === null) {
@@ -553,6 +567,7 @@ class ProjectionService
             if ($card->due_day !== null && $card->due_day < $card->closing_day) {
                 return $closingCycleMonth->addMonth();
             }
+
             return $closingCycleMonth;
         }
 

@@ -466,6 +466,14 @@
            class="sidebar-link {{ request()->routeIs('dashboard') ? 'active' : '' }}">
             <i class="bi bi-grid-1x2"></i> Dashboard
         </a>
+        <a href="{{ route('dashboard2') }}"
+           class="sidebar-link {{ request()->routeIs('dashboard2') ? 'active' : '' }}">
+            <i class="bi bi-layout-text-window-reverse"></i> Dashboard 2
+        </a>
+        <a href="{{ route('dashboard3') }}"
+           class="sidebar-link {{ request()->routeIs('dashboard3') ? 'active' : '' }}">
+            <i class="bi bi-water"></i> Dashboard 3
+        </a>
         <a href="{{ route('investments.index') }}"
            class="sidebar-link {{ request()->routeIs('investments.*') ? 'active' : '' }}">
             <i class="bi bi-piggy-bank"></i> Investimentos

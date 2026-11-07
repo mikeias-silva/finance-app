@@ -140,6 +140,16 @@
                         <div class="form-text">A 1ª parcela cai na fatura do mês da compra.</div>
                     </div>
 
+                    <div class="form-check mb-4">
+                        <input class="form-check-input" type="checkbox" value="1"
+                               id="excluded_from_projection" name="excluded_from_projection"
+                               @checked(old('excluded_from_projection', false))>
+                        <label class="form-check-label" for="excluded_from_projection">
+                            Não entra nos cálculos
+                            <span class="d-block text-muted small">Compra de outra pessoa no seu cartão: fica registrada, mas fora das faturas e da projeção.</span>
+                        </label>
+                    </div>
+
                     <div class="d-flex gap-2">
                         <button type="submit" class="btn btn-primary px-4">
                             <i class="bi bi-check-lg me-1"></i> Salvar compra

@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Models\BalanceSnapshot;
 use App\Models\CdiRate;
 use App\Models\InvestmentBox;
 use Carbon\Carbon;
@@ -41,6 +42,54 @@ class InvestmentService
     public function totalWithYield(InvestmentBox $box): float
     {
         return $this->currentBalance($box) + $this->calculateYield($box);
+    }
+
+    /**
+     * O dinheiro de cada caixinha ativa, para projetar o rendimento. A base é o
+     * saldo real lido na importação, que é o que está na âncora; como ele vem como
+     * um total só, cada caixinha fica com a sua parte no que foi depositado. Antes
+     * da primeira importação, vale o total simulado, a mesma âncora da projeção.
+     *
+     * @return array<int, array{rate: float, balance: float}>
+     */
+    public function yieldingBoxes(): array
+    {
+        $boxes = InvestmentBox::with('transactions')->where('is_active', true)->get();
+        $snapshot = BalanceSnapshot::latestSnapshot();
+        $deposited = $boxes->sum(fn (InvestmentBox $box) => $this->currentBalance($box));
+
+        return $boxes
+            ->map(fn (InvestmentBox $box) => [
+                'rate' => (float) $box->rate_percentage,
+                'balance' => $snapshot && $deposited > 0
+                    ? $snapshot->boxes * $this->currentBalance($box) / $deposited
+                    : $this->totalWithYield($box),
+            ])
+            ->filter(fn (array $box) => $box['balance'] > 0)
+            ->values()
+            ->all();
+    }
+
+    /**
+     * Quanto as caixinhas rendem no período, com o CDI vigente hoje. O saldo de cada
+     * uma cresce junto, porque o rendimento de um ciclo também rende no seguinte.
+     * O valor é bruto, antes do imposto, como o rendimento já mostrado na tela.
+     *
+     * @param  array<int, array{rate: float, balance: float}>  $boxes
+     */
+    public function accrue(array &$boxes, Carbon $from, Carbon $until): float
+    {
+        $days = $this->businessDaysBetween($from, $until);
+        $cdi = $this->getCdiRateAt(Carbon::today());
+        $total = 0.0;
+
+        foreach ($boxes as &$box) {
+            $earned = $box['balance'] * (pow(1 + $cdi * ($box['rate'] / 100) / 100, $days / 252) - 1);
+            $box['balance'] += $earned;
+            $total += $earned;
+        }
+
+        return $total;
     }
 
     public function availableCapacity(InvestmentBox $box): ?float

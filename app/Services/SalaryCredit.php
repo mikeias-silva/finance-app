@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Models\RecurringIncome;
 use App\Models\Salary;
 use Carbon\Carbon;
 
@@ -33,6 +34,36 @@ class SalaryCredit
         }
 
         return false;
+    }
+
+    /** Total das receitas recorrentes pagas no ciclo desta data. */
+    public function recurringTotal(string $date): float
+    {
+        return round((float) $this->recurringIncomes($date)->sum('amount'), 2);
+    }
+
+    /**
+     * Este lançamento é uma receita recorrente cadastrada, paga fora do crédito do
+     * salário? O valor exato é o que a identifica: nem pagador nem descrição são
+     * conhecidos, e o dia pode não ser o de abertura do ciclo.
+     */
+    public function isRecurringIncome(array $transaction): bool
+    {
+        $amount = round((float) ($transaction['amount'] ?? 0), 2);
+
+        if ($amount <= 0) {
+            return false;
+        }
+
+        $date = Carbon::parse($transaction['date'])->toDateString();
+
+        return $this->recurringIncomes($date)
+            ->contains(fn (RecurringIncome $income) => round($income->amount, 2) === $amount);
+    }
+
+    private function recurringIncomes(string $date)
+    {
+        return RecurringIncome::paidOn(BillingPeriod::current(Carbon::parse($date)->startOfDay())['start'])->get();
     }
 
     /** Este lançamento é o crédito do salário? */

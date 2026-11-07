@@ -26,6 +26,7 @@ class StatementClassifier
         'MSS VECTRA LOT SPE LTDA'   => ['label' => 'Financiamento Terreno',  'db_description' => 'Financiamento Terreno'],
         'TIM S A'                   => ['label' => 'Tim',                    'db_description' => 'Tim'],
         'STAR PROTECAO VEICULAR'    => ['label' => 'Seguro Onix',            'db_description' => 'Seguro Onix'],
+        'BV GARANTIA'               => ['label' => 'Condomínio',             'db_description' => 'Condomínio'],
         'CARTOES CAIXA VISA PF'     => ['label' => 'Pagamento Cartão Caixa', 'db_description' => null, 'credit_card' => 'Caixa - Visa'],
         'Pagamento de fatura'       => ['label' => 'Pagamento Fatura Nubank','db_description' => null, 'credit_card' => 'Nubank - Mastercard'],
     ];

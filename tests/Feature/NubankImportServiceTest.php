@@ -3,9 +3,12 @@
 namespace Tests\Feature;
 
 use App\Models\BalanceSnapshot;
+use App\Models\CreditCard;
+use App\Models\CreditCardPurchase;
 use App\Models\FixedExpense;
 use App\Models\InvestmentBox;
 use App\Models\InvestmentTransaction;
+use App\Models\RecurringIncome;
 use App\Models\Salary;
 use App\Models\VariableExpense;
 use App\Models\VariableIncome;
@@ -160,6 +163,151 @@ class NubankImportServiceTest extends TestCase
         ]);
         $this->assertSame(1, VariableIncome::count());
         $this->assertSame(200.00, $result->salary['difference']);
+    }
+
+    public function test_a_recurring_income_paid_with_the_salary_does_not_become_a_variable_income(): void
+    {
+        $this->givenASalaryOf(5000.00);
+        $this->givenARecurringIncomeOf(900.00);
+        $this->fakePluggy([$this->salaryTransaction(5900.00)]);
+
+        $result = $this->import();
+
+        // 5.900 = 5.000 de salário + 900 que a projeção já soma como recorrente.
+        $this->assertSame(0, VariableIncome::count());
+        $this->assertSame(5900.00, $result->salary['expected']);
+        $this->assertSame(0.0, $result->salary['difference']);
+    }
+
+    public function test_only_what_exceeds_salary_and_recurring_income_becomes_a_variable_income(): void
+    {
+        $this->givenASalaryOf(5000.00);
+        $this->givenARecurringIncomeOf(800.00);
+        $this->fakePluggy([$this->salaryTransaction(5900.00)]);
+
+        $this->import();
+
+        $this->assertDatabaseHas('variable_incomes', ['description' => 'Ajuste Salário', 'amount' => 100.00]);
+        $this->assertSame(1, VariableIncome::count());
+    }
+
+    public function test_a_small_salary_difference_is_not_mistaken_for_the_recurring_income(): void
+    {
+        $this->givenASalaryOf(5000.00);
+        $this->givenARecurringIncomeOf(900.00);
+        $this->fakePluggy([$this->salaryTransaction(5200.00)]);
+
+        $this->import();
+
+        // 200 a mais não é a gratificação de 900, que pode cair em crédito separado.
+        $this->assertDatabaseHas('variable_incomes', ['description' => 'Ajuste Salário', 'amount' => 200.00]);
+    }
+
+    public function test_a_recurring_income_paid_on_its_own_does_not_become_a_variable_income(): void
+    {
+        $this->givenASalaryOf(5000.00);
+        $this->givenARecurringIncomeOf(900.00);
+        $this->fakePluggy([
+            $this->salaryTransaction(5000.00),
+            $this->transaction('tx-fa2', 900.00, 'Transferência Recebida|FA-2'),
+        ]);
+
+        $result = $this->import();
+
+        $this->assertSame(0, VariableIncome::count());
+        $this->assertSame(2, $result->confirmed);
+    }
+
+    public function test_a_credit_of_another_amount_stays_a_variable_income(): void
+    {
+        $this->givenASalaryOf(5000.00);
+        $this->givenARecurringIncomeOf(900.00);
+        $this->fakePluggy([$this->transaction('tx-1', 899.99, 'Transferência Recebida|FULANO')]);
+
+        $this->import();
+
+        $this->assertDatabaseHas('variable_incomes', ['identifier' => 'pluggy:tx-1', 'amount' => 899.99]);
+    }
+
+    public function test_a_recurring_income_not_yet_in_force_does_not_absorb_the_credit(): void
+    {
+        $this->givenASalaryOf(5000.00);
+        $this->givenARecurringIncomeOf(900.00, effectiveFrom: '2030-01-01');
+        $this->fakePluggy([$this->transaction('tx-1', 900.00, 'Transferência Recebida|FULANO')]);
+
+        $this->import();
+
+        $this->assertDatabaseHas('variable_incomes', ['identifier' => 'pluggy:tx-1', 'amount' => 900.00]);
+    }
+
+    public function test_the_condominium_paid_to_bv_garantia_only_records_the_difference(): void
+    {
+        $this->givenASalaryOf(5000.00);
+        FixedExpense::create(['description' => 'Condomínio', 'amount' => 356.00, 'is_active' => true]);
+        $this->fakePluggy([$this->transaction('tx-bv', -356.81, 'Transferência enviada pelo Pix|BV GARANTIA S.A.')]);
+
+        $this->import();
+
+        // O valor cheio já está na projeção como gasto fixo: só a diferença vira lançamento.
+        $this->assertSame(1, VariableExpense::count());
+        $this->assertDatabaseHas('variable_expenses', ['description' => 'Ajuste Condomínio', 'amount' => 0.81]);
+        $this->assertDatabaseHas('statement_payments', ['label' => 'Condomínio', 'amount' => 356.81]);
+    }
+
+    public function test_a_gas_station_named_bv_stays_a_variable_expense(): void
+    {
+        $this->givenASalaryOf(5000.00);
+        FixedExpense::create(['description' => 'Condomínio', 'amount' => 356.00, 'is_active' => true]);
+        $this->fakePluggy([$this->transaction('tx-posto', -100.00, 'Compra no débito|POSTO BV LTDA')]);
+
+        $this->import();
+
+        $this->assertDatabaseHas('variable_expenses', ['description' => 'Compra no débito|POSTO BV LTDA', 'amount' => 100.00]);
+    }
+
+    public function test_the_pix_returning_a_third_party_installment_is_not_income(): void
+    {
+        $this->givenASalaryOf(5000.00);
+        $this->givenAThirdPartyPurchase(purchasedAt: '2026-08-23');
+        $this->fakePluggy([$this->transaction('tx-mae', 506.00, 'Transferência Recebida|MARIA')]);
+
+        $result = $this->import();
+
+        $this->assertSame(0, VariableIncome::count());
+        $this->assertSame(1, $result->confirmed);
+    }
+
+    public function test_a_credit_of_another_value_is_still_income(): void
+    {
+        $this->givenASalaryOf(5000.00);
+        $this->givenAThirdPartyPurchase(purchasedAt: '2026-08-23');
+        $this->fakePluggy([$this->transaction('tx-1', 505.99, 'Transferência Recebida|MARIA')]);
+
+        $this->import();
+
+        $this->assertDatabaseHas('variable_incomes', ['identifier' => 'pluggy:tx-1']);
+    }
+
+    public function test_the_same_value_long_after_the_last_installment_is_income(): void
+    {
+        $this->givenASalaryOf(5000.00);
+        $this->givenAThirdPartyPurchase(purchasedAt: '2024-01-10');
+        $this->fakePluggy([$this->transaction('tx-1', 506.00, 'Transferência Recebida|MARIA')]);
+
+        $this->import();
+
+        $this->assertDatabaseHas('variable_incomes', ['identifier' => 'pluggy:tx-1']);
+    }
+
+    public function test_a_normal_purchase_of_the_same_installment_changes_nothing(): void
+    {
+        $this->givenASalaryOf(5000.00);
+        $this->givenAThirdPartyPurchase(purchasedAt: '2026-08-23', excluded: false);
+        $this->fakePluggy([$this->transaction('tx-1', 506.00, 'Transferência Recebida|MARIA')]);
+
+        $this->import();
+
+        $this->assertDatabaseHas('variable_incomes', ['identifier' => 'pluggy:tx-1']);
     }
 
     public function test_a_salary_below_the_forecast_becomes_a_variable_expense(): void
@@ -357,6 +505,18 @@ class NubankImportServiceTest extends TestCase
         return app(NubankImportService::class)->import($options ?? new NubankImportOptions);
     }
 
+    private function givenAThirdPartyPurchase(string $purchasedAt, bool $excluded = true): void
+    {
+        CreditCardPurchase::create([
+            'credit_card_id' => CreditCard::create(['name' => 'Caixa - Visa', 'closing_day' => 22, 'due_day' => 1])->id,
+            'description' => 'COMPRA PARA TERCEIRO',
+            'total_amount' => 5060.00,
+            'installments' => 10,
+            'purchased_at' => $purchasedAt,
+            'excluded_from_projection' => $excluded,
+        ]);
+    }
+
     private function givenASalaryOf(float $amount): void
     {
         // 09/09/2026 cai no ciclo de setembro, que abre em 31/08 (segunda). É o
@@ -366,6 +526,16 @@ class NubankImportServiceTest extends TestCase
         $this->date = Carbon::parse($this->salaryDate)->addDay()->toDateString();
 
         Salary::create(['amount' => $amount, 'effective_from' => '2025-01-01']);
+    }
+
+    private function givenARecurringIncomeOf(float $amount, string $effectiveFrom = '2025-01-01'): void
+    {
+        RecurringIncome::create([
+            'description' => 'FA-2',
+            'amount' => $amount,
+            'is_active' => true,
+            'effective_from' => $effectiveFrom,
+        ]);
     }
 
     /**

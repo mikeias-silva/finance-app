@@ -54,6 +54,26 @@ class DashboardTest extends TestCase
         $this->assertEquals(6000.00, $september['accumulated']);
     }
 
+    public function test_a_reading_from_the_previous_cycle_leaves_this_cycles_salary_pending(): void
+    {
+        Carbon::setTestNow('2026-09-15'); // ciclo de setembro: 31/08 a 29/09
+
+        // Lida em 20/08, no ciclo de agosto: viu o salário de agosto, não o de setembro.
+        BalanceSnapshot::create([
+            'checking' => 1000.00,
+            'boxes' => 0.0,
+            'total' => 1000.00,
+            'salary_credited' => true,
+            'synced_at' => '2026-08-20 10:00:00',
+        ]);
+
+        $september = $this->unlocked()->get('/')->viewData('projection')['2026-09'];
+
+        // O salário de setembro ainda não está no saldo lido: continua por vir.
+        $this->assertEquals(5000.00, $september['pending']);
+        $this->assertEquals(6000.00, $september['accumulated']);
+    }
+
     public function test_the_dashboard_never_calls_pluggy(): void
     {
         $this->givenABalanceOf(1000.00, salaryCredited: false);

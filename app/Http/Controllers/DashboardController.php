@@ -19,18 +19,18 @@ class DashboardController extends Controller
 
         // Determina o mês de faturamento atual com base nos dias úteis.
         // Se hoje já passou o penúltimo dia útil do mês corrente, estamos no próximo período.
-        $today         = now()->addDay(1)->startOfDay();
+        $today = now()->addDay(1)->startOfDay();
         $calendarMonth = $today->copy()->startOfMonth();
         $currentPeriod = BillingPeriod::for($calendarMonth);
-        $from          = $today->lte($currentPeriod['end'])
+        $from = $today->lte($currentPeriod['end'])
             ? $calendarMonth
             : $calendarMonth->copy()->addMonth();
 
-        $to         = $from->copy()->addMonths($months - 1);
+        $to = $from->copy()->addMonths($months - 1);
         $projection = $service->project($from, $to);
         $installmentsMonth = (string) $request->input('installments_month', $projection->keys()->first());
 
-        if (!$projection->has($installmentsMonth)) {
+        if (! $projection->has($installmentsMonth)) {
             $installmentsMonth = (string) $projection->keys()->first();
         }
 
@@ -43,21 +43,22 @@ class DashboardController extends Controller
         $balanceSnapshot = BalanceSnapshot::latestSnapshot();
 
         $investmentBoxes = InvestmentBox::with('transactions')->where('is_active', true)->get();
-        $investmentData  = $investmentBoxes->map(fn($box) => [
-            'box'     => $box,
+        $investmentData = $investmentBoxes->map(fn ($box) => [
+            'box' => $box,
             'balance' => $investmentService->currentBalance($box),
-            'yield'   => $investmentService->calculateYield($box),
-            'total'   => $investmentService->totalWithYield($box),
+            'yield' => $investmentService->calculateYield($box),
+            'total' => $investmentService->totalWithYield($box),
         ]);
-        $totalInvested   = $investmentData->sum('balance');
-        $totalYield      = $investmentData->sum('yield');
-        $totalWithYield  = $investmentData->sum('total');
+        $totalInvested = $investmentData->sum('balance');
+        $totalYield = $investmentData->sum('yield');
+        $totalWithYield = $investmentData->sum('total');
 
         $anchor = $balanceSnapshot?->total ?? $totalWithYield;
 
         // O salário só sai do previsto quando o crédito aparece no extrato. Sem
-        // importação que responda por ele, a projeção decide pelo calendário.
-        $salaryCredited = $balanceSnapshot?->salary_credited;
+        // importação que responda por ele, a projeção decide pelo calendário; e
+        // uma leitura de ciclo anterior não responde pelo salário deste.
+        $salaryCredited = $balanceSnapshot?->salaryCreditedInCurrentCycle();
 
         $projection = $service->accumulate($projection, $anchor, $salaryCredited);
 

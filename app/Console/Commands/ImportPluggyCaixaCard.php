@@ -4,6 +4,7 @@ namespace App\Console\Commands;
 
 use App\Models\CreditCard;
 use App\Models\CreditCardPurchase;
+use App\Services\DescriptionMatcher;
 use App\Services\PluggyService;
 use App\Services\RecurringChargeDetector;
 use Carbon\Carbon;
@@ -24,17 +25,38 @@ use Illuminate\Support\Collection;
 class ImportPluggyCaixaCard extends Command
 {
     protected $signature = 'import:pluggy-caixa-card
-        {--from= : Traz o que apareceu na API a partir desta data (padrão: ontem)}
+        {--from= : Traz o que apareceu na API a partir desta data (padrão: 7 dias atrás)}
         {--to= : Traz o que apareceu na API até esta data (padrão: hoje)}
         {--all : Importa todo o histórico disponível, ignorando o período}
+        {--purchased-from= : Ignora compras anteriores a esta data (padrão: início da sincronização)}
         {--dry-run : Mostra o que seria gravado, sem gravar}';
 
     protected $description = 'Importa as compras do cartão de crédito da Caixa pela API do Pluggy';
 
     private const CARD_NAME = 'Caixa - Visa';
 
-    public function handle(PluggyService $pluggy, RecurringChargeDetector $detector): int
+    /** Compras anteriores a esta data ficam como estão, mesmo as que faltam. */
+    private const SYNC_START = '2026-10-01';
+
+    /** Quanto o valor digitado à mão pode errar e ainda ser a mesma compra. */
+    private const VALUE_TOLERANCE = 5.00;
+
+    private const DATE_TOLERANCE_DAYS = 5;
+
+    /** Sem nome parecido nem parcelas para confirmar, a margem é bem menor. */
+    private const UNNAMED_VALUE_TOLERANCE = 1.00;
+
+    private const UNNAMED_DATE_TOLERANCE_DAYS = 1;
+
+    /** Janela padrão: cobre dias em que a execução diária tenha falhado. */
+    private const DEFAULT_WINDOW_DAYS = 7;
+
+    private DescriptionMatcher $matcher;
+
+    public function handle(PluggyService $pluggy, RecurringChargeDetector $detector, DescriptionMatcher $matcher): int
     {
+        $this->matcher = $matcher;
+
         $card = CreditCard::where('name', self::CARD_NAME)->first();
 
         if (! $card) {
@@ -91,7 +113,20 @@ class ImportPluggyCaixaCard extends Command
                 .$recorrentes->map(fn ($v) => number_format($v, 2, ',', '.'))->implode(' · R$ '));
         }
 
-        $purchases = $this->purchasesFrom($transactions, $from, $to, $recorrentes);
+        // Assinaturas mudam de valor e de dia, então o detector não as reconhece:
+        // quem as identifica é o nome cadastrado.
+        $assinaturas = CreditCardPurchase::where('credit_card_id', $card->id)->where('is_recurring', true)->get();
+        [$cobrancas, $demais] = collect($transactions)->partition(
+            fn (array $t) => $this->subscriptionFor($t, $assinaturas) !== null
+        );
+
+        $purchasedFrom = Carbon::parse($this->option('purchased-from') ?? self::SYNC_START)->startOfDay();
+
+        $this->adjustSubscriptions($cobrancas, $assinaturas, $card, $purchasedFrom, $dryRun);
+
+        $purchases = $this->purchasesFrom($demais->all(), $from, $to, $recorrentes)
+            ->filter(fn (array $p) => $p['purchased_at'] >= $purchasedFrom->toDateString())
+            ->values();
 
         if ($purchases->isEmpty()) {
             $this->comment('Nenhuma compra encontrada no período.');
@@ -110,7 +145,8 @@ class ImportPluggyCaixaCard extends Command
      * Janela de quando o lançamento apareceu na API — não da data da compra.
      * A Caixa publica em bloco no fechamento da fatura, então filtrar pela data
      * da compra traria lançamentos antigos toda vez que a fatura fechasse.
-     * Por padrão, o que entrou na API desde ontem.
+     * Por padrão, os últimos dias: repetir a janela é seguro, porque o que já
+     * existe não entra de novo.
      */
     private function period(): array
     {
@@ -119,7 +155,7 @@ class ImportPluggyCaixaCard extends Command
         }
 
         return [
-            Carbon::parse($this->option('from') ?? now()->subDay()->toDateString())->startOfDay(),
+            Carbon::parse($this->option('from') ?? now()->subDays(self::DEFAULT_WINDOW_DAYS)->toDateString())->startOfDay(),
             Carbon::parse($this->option('to') ?? now()->toDateString())->endOfDay(),
         ];
     }
@@ -220,20 +256,30 @@ class ImportPluggyCaixaCard extends Command
      * parcela + número de parcelas: se já houver uma compra com essa combinação,
      * é a mesma compra e não entra de novo — mesma data e mesmo valor não são
      * duas compras distintas.
+     *
+     * O que não bate exatamente passa pelo cadastro manual: sendo a mesma compra
+     * digitada com outro valor ou data, ela é corrigida com o que veio do Pluggy
+     * em vez de duplicada. Cada lançamento manual só absorve uma compra.
      */
     private function import(Collection $purchases, CreditCard $card, bool $dryRun): void
     {
-        $existentes = CreditCardPurchase::where('credit_card_id', $card->id)
-            ->get()
-            ->map(fn (CreditCardPurchase $p) => $this->key(
-                Carbon::parse($p->purchased_at)->toDateString(),
-                round((float) $p->total_amount / max(1, (int) $p->installments), 2),
-                max(1, (int) $p->installments)
-            ))
+        $cadastradas = CreditCardPurchase::where('credit_card_id', $card->id)->get();
+
+        $existentes = $cadastradas->map(fn (CreditCardPurchase $p) => $this->storedKey($p))->flip();
+
+        $chavesDaApi = $purchases
+            ->map(fn (array $p) => $this->key($p['purchased_at'], $p['installment_amount'], $p['installments']))
             ->flip();
+
+        $manuais = $cadastradas
+            ->reject(fn (CreditCardPurchase $p) => $p->is_recurring
+                || CreditCardPurchase::isAdjustment($p->description)
+                || $chavesDaApi->has($this->storedKey($p)))
+            ->keyBy('id');
 
         $criadas = 0;
         $ignoradas = 0;
+        $corrigidas = 0;
 
         foreach ($purchases as $p) {
             $chave = $this->key($p['purchased_at'], $p['installment_amount'], $p['installments']);
@@ -246,10 +292,40 @@ class ImportPluggyCaixaCard extends Command
                     $p['installments'],
                     mb_strimwidth($p['description'], 0, 34, '…')
                 ));
+
                 continue;
             }
 
             $total = round($p['installment_amount'] * $p['installments'], 2);
+
+            $manual = $this->sameManualPurchase($p, $total, $manuais);
+
+            if ($manual !== null) {
+                $manuais->forget($manual->id);
+                $existentes->put($chave, true);
+                $corrigidas++;
+
+                $this->line(sprintf('  <comment>~</comment> %s %s %dx  %s  →  %s %s %dx  (%s)',
+                    Carbon::parse($manual->purchased_at)->format('d/m'),
+                    number_format((float) $manual->total_amount, 2, ',', '.'),
+                    $manual->installments,
+                    mb_strimwidth($manual->description, 0, 24, '…'),
+                    Carbon::parse($p['purchased_at'])->format('d/m'),
+                    number_format($total, 2, ',', '.'),
+                    $p['installments'],
+                    mb_strimwidth($p['description'], 0, 28, '…')
+                ));
+
+                if (! $dryRun) {
+                    $manual->update([
+                        'total_amount' => $total,
+                        'installments' => $p['installments'],
+                        'purchased_at' => $p['purchased_at'],
+                    ]);
+                }
+
+                continue;
+            }
 
             if (! $dryRun) {
                 CreditCardPurchase::create([
@@ -275,8 +351,130 @@ class ImportPluggyCaixaCard extends Command
         }
 
         $this->newLine();
-        $this->info("✅ {$criadas} compra(s) importada(s).");
+        $this->info($dryRun ? "✅ {$criadas} compra(s) seriam importada(s)." : "✅ {$criadas} compra(s) importada(s).");
+        $this->line($dryRun ? "🔧 {$corrigidas} seriam corrigida(s) pelo Pluggy." : "🔧 {$corrigidas} corrigida(s) pelo Pluggy.");
         $this->line("⏭  {$ignoradas} já existia(m) no banco.");
+    }
+
+    /** A compra manual que corresponde a esta, a mais próxima se houver mais de uma. */
+    private function sameManualPurchase(array $purchase, float $total, Collection $manuais): ?CreditCardPurchase
+    {
+        return $manuais
+            ->filter(fn (CreditCardPurchase $manual) => $this->isSamePurchase($purchase, $total, $manual))
+            ->sortBy(fn (CreditCardPurchase $manual) => abs((float) $manual->total_amount - $total)
+                + $this->daysApart($purchase['purchased_at'], $manual))
+            ->first();
+    }
+
+    /**
+     * Valor e data próximos não bastam: duas compras de valor parecido em dias
+     * vizinhos são comuns. Precisa de uma confirmação — nome parecido, ou o mesmo
+     * parcelamento, que resolve quando a descrição manual é outra ("hotel RJ" e
+     * "EBN *NOMAD"). Sem nenhuma das duas, só uma coincidência quase exata conta.
+     */
+    private function isSamePurchase(array $purchase, float $total, CreditCardPurchase $manual): bool
+    {
+        $valueGap = round(abs((float) $manual->total_amount - $total), 2);
+        $days = $this->daysApart($purchase['purchased_at'], $manual);
+
+        $confirmed = $this->matcher->similar($manual->description, $purchase['description'])
+            || ($purchase['installments'] > 1 && $purchase['installments'] === (int) $manual->installments);
+
+        return $confirmed
+            ? $valueGap <= self::VALUE_TOLERANCE && $days <= self::DATE_TOLERANCE_DAYS
+            : $valueGap <= self::UNNAMED_VALUE_TOLERANCE && $days <= self::UNNAMED_DATE_TOLERANCE_DAYS;
+    }
+
+    private function daysApart(string $date, CreditCardPurchase $manual): int
+    {
+        return (int) abs(Carbon::parse($date)->startOfDay()->diffInDays(Carbon::parse($manual->purchased_at)->startOfDay()));
+    }
+
+    /** A assinatura cadastrada a que este lançamento pertence, se houver. */
+    private function subscriptionFor(array $transaction, Collection $assinaturas): ?CreditCardPurchase
+    {
+        if ((float) $transaction['amount'] <= 0) {
+            return null;
+        }
+
+        return $assinaturas->first(fn (CreditCardPurchase $assinatura) => $this->matcher->containsAllWords(
+            $assinatura->description,
+            $transaction['description'] ?? ''
+        ));
+    }
+
+    /**
+     * A assinatura segue com o valor cadastrado e só a diferença do mês vira
+     * lançamento, como nas contas fixas. Fica no cartão, e não como despesa da
+     * conta, para cair na fatura da cobrança real. Rodar de novo atualiza o mesmo
+     * ajuste. Um lançamento pendente e sua versão confirmada contam uma vez só.
+     */
+    private function adjustSubscriptions(Collection $cobrancas, Collection $assinaturas, CreditCard $card, Carbon $since, bool $dryRun): void
+    {
+        foreach ($assinaturas as $assinatura) {
+            $inicio = Carbon::parse($assinatura->purchased_at)->startOfDay();
+
+            $cobrancas
+                ->filter(fn (array $t) => $this->subscriptionFor($t, $assinaturas)?->is($assinatura))
+                ->filter(fn (array $t) => Carbon::parse($t['date'])->gte($inicio) && Carbon::parse($t['date'])->gte($since))
+                ->unique(fn (array $t) => substr($t['date'], 0, 10).'|'.number_format((float) $t['amount'], 2, '.', ''))
+                ->groupBy(fn (array $t) => Carbon::parse($t['date'])->format('Y-m'))
+                ->each(fn (Collection $mes) => $this->adjustMonth($mes, $assinatura, $card, $dryRun));
+        }
+    }
+
+    private function adjustMonth(Collection $lines, CreditCardPurchase $assinatura, CreditCard $card, bool $dryRun): void
+    {
+        $date = Carbon::parse($lines->first()['date']);
+        $paid = round($lines->sum(fn (array $t) => (float) $t['amount']), 2);
+        $difference = round($paid - (float) $assinatura->total_amount, 2);
+        $description = CreditCardPurchase::ADJUSTMENT_PREFIX.$assinatura->description;
+
+        $ajuste = CreditCardPurchase::where('credit_card_id', $card->id)
+            ->where('description', $description)
+            ->whereBetween('purchased_at', [$date->copy()->startOfMonth()->toDateString(), $date->copy()->endOfMonth()->toDateString()])
+            ->first();
+
+        $this->line(sprintf('  * %s  %s: cobrado %s, cadastrado %s, ajuste %s',
+            $date->format('m/Y'),
+            $assinatura->description,
+            number_format($paid, 2, ',', '.'),
+            number_format((float) $assinatura->total_amount, 2, ',', '.'),
+            number_format($difference, 2, ',', '.')
+        ));
+
+        if ($dryRun) {
+            return;
+        }
+
+        if ($difference === 0.0) {
+            $ajuste?->delete();
+
+            return;
+        }
+
+        if ($ajuste !== null) {
+            $ajuste->update(['total_amount' => $difference]);
+
+            return;
+        }
+
+        CreditCardPurchase::create([
+            'credit_card_id' => $card->id,
+            'description' => $description,
+            'total_amount' => $difference,
+            'installments' => 1,
+            'purchased_at' => $date->toDateString(),
+        ]);
+    }
+
+    private function storedKey(CreditCardPurchase $purchase): string
+    {
+        return $this->key(
+            Carbon::parse($purchase->purchased_at)->toDateString(),
+            round((float) $purchase->total_amount / max(1, (int) $purchase->installments), 2),
+            max(1, (int) $purchase->installments)
+        );
     }
 
     private function key(string $date, float $amount, int $installments): string

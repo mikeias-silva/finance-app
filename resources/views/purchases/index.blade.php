@@ -64,7 +64,12 @@
                 @endphp
                 <tr>
                     <td>
-                        <div class="fw-medium">{{ $purchase->description }}</div>
+                        <div class="fw-medium">
+                            {{ $purchase->description }}
+                            @if($purchase->excluded_from_projection)
+                                <span class="badge bg-light text-dark border ms-1" style="font-size:11px;">Fora dos cálculos</span>
+                            @endif
+                        </div>
                         @if($remaining > 0)
                             <div class="small text-muted">{{ $remaining }} parcela(s) restante(s)</div>
                         @else
