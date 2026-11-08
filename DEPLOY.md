@@ -73,7 +73,7 @@ cat > .env <<'EOF'
 APP_NAME="Finance App"
 APP_ENV=production
 APP_DEBUG=false
-APP_URL=http://137.131.228.2
+APP_URL=https://137.131.228.2
 APP_KEY=
 APP_PASSWORD_HASH=
 
@@ -144,7 +144,7 @@ docker compose -f docker-compose.prod.yml exec php php artisan view:cache
 
 ```bash
 curl -sI http://localhost/          # de dentro da máquina
-curl -sI http://137.131.228.2/      # do seu computador
+curl -sI https://137.131.228.2/     # do seu computador
 docker compose -f docker-compose.prod.yml ps
 docker stats --no-stream            # confira o consumo de RAM
 free -h
@@ -208,3 +208,35 @@ Roda pelo cron do usuário `ubuntu`, às 16:30 UTC, depois da sincronização do
 ```
 
 Só entram compras de 01/10/2026 em diante. Para conferir sem gravar, use `--all --dry-run`.
+
+## HTTPS
+
+Certificado do Let's Encrypt emitido para o IP, sem domínio. Ele vale 6 dias,
+por isso a renovação é automática. A porta 80 só responde à validação do
+Let's Encrypt e redireciona o resto para o HTTPS (`docker/nginx/prod.conf`).
+
+Precisa da porta 443 liberada em dois lugares, como a 80: na Security List da
+Oracle e no iptables (`sudo iptables -I INPUT 2 -p tcp --dport 443 -j ACCEPT`
+e `sudo netfilter-persistent save`). No `.env`: `APP_URL=https://...` e
+`SESSION_SECURE_COOKIE=true`.
+
+Emissão, uma vez só:
+
+```bash
+sudo mkdir -p /var/www/certbot /etc/letsencrypt /var/lib/letsencrypt
+docker run --rm -v /etc/letsencrypt:/etc/letsencrypt -v /var/lib/letsencrypt:/var/lib/letsencrypt \
+  -v /var/www/certbot:/var/www/certbot certbot/certbot:v5.6.0 certonly --non-interactive \
+  --agree-tos --register-unsafely-without-email --webroot -w /var/www/certbot \
+  --preferred-profile shortlived --ip-address 137.131.228.2 --cert-name finance-ip
+```
+
+Depois, em `/etc/letsencrypt/renewal/finance-ip.conf`, acrescente
+`renew_before_expiry = 3 days`. Sem isso o Certbot usa o padrão de 30 dias,
+maior que a validade inteira, renova a cada execução e estoura o limite de
+emissões do Let's Encrypt.
+
+Renovação, no crontab do usuário `ubuntu` (só emite quando faltam 3 dias):
+
+```bash
+17 3,15 * * * docker run --rm -v /etc/letsencrypt:/etc/letsencrypt -v /var/lib/letsencrypt:/var/lib/letsencrypt -v /var/www/certbot:/var/www/certbot certbot/certbot:v5.6.0 renew -q && docker exec finance_nginx nginx -s reload >> /home/ubuntu/certbot-renew.log 2>&1
+```
