@@ -277,11 +277,13 @@ class ImportPluggyCaixaCard extends Command
                 || $chavesDaApi->has($this->storedKey($p)))
             ->keyBy('id');
 
+        $pares = $this->pairManuals($purchases, $manuais, $existentes);
+
         $criadas = 0;
         $ignoradas = 0;
         $corrigidas = 0;
 
-        foreach ($purchases as $p) {
+        foreach ($purchases as $index => $p) {
             $chave = $this->key($p['purchased_at'], $p['installment_amount'], $p['installments']);
 
             if ($existentes->has($chave)) {
@@ -298,10 +300,9 @@ class ImportPluggyCaixaCard extends Command
 
             $total = round($p['installment_amount'] * $p['installments'], 2);
 
-            $manual = $this->sameManualPurchase($p, $total, $manuais);
+            $manual = $pares->get($index);
 
             if ($manual !== null) {
-                $manuais->forget($manual->id);
                 $existentes->put($chave, true);
                 $corrigidas++;
 
@@ -356,11 +357,46 @@ class ImportPluggyCaixaCard extends Command
         $this->line("⏭  {$ignoradas} já existia(m) no banco.");
     }
 
+    /**
+     * Associa cada compra do Pluggy a uma compra manual, uma só para uma só. Em
+     * duas passadas: primeiro os casamentos confirmados (nome ou parcelamento),
+     * depois os de valor e data quase exatos. Assim uma compra de valor parecido
+     * sem nome em comum (Aguinaldo 16,20 em 01/09) não rouba a linha manual de
+     * outra compra confirmada (matte 15,30 em 03/09).
+     *
+     * @return Collection<int, CreditCardPurchase> chaveada pelo índice da compra da API
+     */
+    private function pairManuals(Collection $purchases, Collection $manuais, Collection $existentes): Collection
+    {
+        $pares = collect();
+        $disponiveis = $manuais;
+
+        foreach ([true, false] as $soConfirmados) {
+            foreach ($purchases as $index => $p) {
+                $chave = $this->key($p['purchased_at'], $p['installment_amount'], $p['installments']);
+
+                if ($pares->has($index) || $existentes->has($chave)) {
+                    continue;
+                }
+
+                $total = round($p['installment_amount'] * $p['installments'], 2);
+                $manual = $this->sameManualPurchase($p, $total, $disponiveis, $soConfirmados);
+
+                if ($manual !== null) {
+                    $pares->put($index, $manual);
+                    $disponiveis = $disponiveis->except($manual->id);
+                }
+            }
+        }
+
+        return $pares;
+    }
+
     /** A compra manual que corresponde a esta, a mais próxima se houver mais de uma. */
-    private function sameManualPurchase(array $purchase, float $total, Collection $manuais): ?CreditCardPurchase
+    private function sameManualPurchase(array $purchase, float $total, Collection $manuais, bool $soConfirmados = false): ?CreditCardPurchase
     {
         return $manuais
-            ->filter(fn (CreditCardPurchase $manual) => $this->isSamePurchase($purchase, $total, $manual))
+            ->filter(fn (CreditCardPurchase $manual) => $this->isSamePurchase($purchase, $total, $manual, $soConfirmados))
             ->sortBy(fn (CreditCardPurchase $manual) => abs((float) $manual->total_amount - $total)
                 + $this->daysApart($purchase['purchased_at'], $manual))
             ->first();
@@ -372,13 +408,17 @@ class ImportPluggyCaixaCard extends Command
      * parcelamento, que resolve quando a descrição manual é outra ("hotel RJ" e
      * "EBN *NOMAD"). Sem nenhuma das duas, só uma coincidência quase exata conta.
      */
-    private function isSamePurchase(array $purchase, float $total, CreditCardPurchase $manual): bool
+    private function isSamePurchase(array $purchase, float $total, CreditCardPurchase $manual, bool $soConfirmados = false): bool
     {
         $valueGap = round(abs((float) $manual->total_amount - $total), 2);
         $days = $this->daysApart($purchase['purchased_at'], $manual);
 
         $confirmed = $this->matcher->similar($manual->description, $purchase['description'])
             || ($purchase['installments'] > 1 && $purchase['installments'] === (int) $manual->installments);
+
+        if ($soConfirmados && ! $confirmed) {
+            return false;
+        }
 
         return $confirmed
             ? $valueGap <= self::VALUE_TOLERANCE && $days <= self::DATE_TOLERANCE_DAYS
