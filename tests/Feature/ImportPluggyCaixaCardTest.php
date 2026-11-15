@@ -302,6 +302,123 @@ class ImportPluggyCaixaCardTest extends TestCase
         $this->assertSame(['mercado livre'], $projection->cardExpensesForMonth(now()->setDate(2026, 11, 1))->pluck('description')->all());
     }
 
+    public function test_a_first_installment_with_another_value_becomes_two_purchases(): void
+    {
+        Carbon::setTestNow('2027-01-05');
+        $this->fakePluggy([
+            $this->installment('tx-1', 356.63, '2026-11-14', '2026-11-22', 1, 12),
+            $this->installment('tx-2', 156.72, '2026-11-14', '2026-12-22', 2, 12),
+        ]);
+
+        $this->import();
+
+        $this->assertSame(2, CreditCardPurchase::count());
+        $this->assertSplitInsurance();
+    }
+
+    public function test_a_split_typed_by_hand_is_not_duplicated_by_the_first_installment_alone(): void
+    {
+        $this->typeSplitInsurance();
+        Carbon::setTestNow('2026-11-23');
+        $this->fakePluggy([$this->installment('tx-1', 356.63, '2026-11-14', '2026-11-22', 1, 12)]);
+
+        $this->import();
+
+        $this->assertSame(2, CreditCardPurchase::count());
+        $this->assertSplitInsurance();
+    }
+
+    public function test_a_split_typed_by_hand_is_not_duplicated_when_the_next_installments_arrive(): void
+    {
+        $this->typeSplitInsurance();
+        Carbon::setTestNow('2027-01-05');
+        $this->fakePluggy([
+            $this->installment('tx-1', 356.63, '2026-11-14', '2026-11-22', 1, 12),
+            $this->installment('tx-2', 156.72, '2026-11-14', '2026-12-22', 2, 12),
+        ]);
+
+        $this->import();
+        $this->import();
+
+        $this->assertSame(2, CreditCardPurchase::count());
+        $this->assertSplitInsurance();
+    }
+
+    public function test_a_purchase_imported_with_equal_installments_is_split_when_the_second_arrives(): void
+    {
+        Carbon::setTestNow('2026-11-23');
+        $this->fakePluggy([$this->installment('tx-1', 356.63, '2026-11-14', '2026-11-22', 1, 12)]);
+        $this->import();
+        $this->assertDatabaseHas('credit_card_purchases', ['total_amount' => 4279.56, 'installments' => 12]);
+
+        // Execução diária: a janela só alcança a 2ª parcela, mas a 1ª segue na API.
+        Carbon::setTestNow('2026-12-23');
+        Http::swap(new Factory);
+        $this->fakePluggy([
+            $this->installment('tx-1', 356.63, '2026-11-14', '2026-11-22', 1, 12),
+            $this->installment('tx-2', 156.72, '2026-11-14', '2026-12-22', 2, 12),
+        ]);
+        $this->artisan('import:pluggy-caixa-card', ['--purchased-from' => '2025-01-01'])->assertSuccessful();
+
+        $this->assertSame(2, CreditCardPurchase::count());
+        $this->assertSplitInsurance();
+    }
+
+    public function test_installments_of_equal_value_are_still_one_purchase(): void
+    {
+        Carbon::setTestNow('2027-01-05');
+        $this->fakePluggy([
+            $this->installment('tx-1', 100.00, '2026-11-14', '2026-11-22', 1, 3),
+            $this->installment('tx-2', 100.00, '2026-11-14', '2026-12-22', 2, 3),
+        ]);
+
+        $this->import();
+
+        $this->assertSame(1, CreditCardPurchase::count());
+        $this->assertDatabaseHas('credit_card_purchases', ['total_amount' => 300.00, 'installments' => 3]);
+    }
+
+    private function typeSplitInsurance(): void
+    {
+        $this->purchase('Seguro Onix 1/12', 356.63, '2026-11-14');
+        $this->purchase('Seguro Onix 2-12/12', 1723.92, '2026-12-14', installments: 11);
+    }
+
+    private function assertSplitInsurance(): void
+    {
+        $compras = CreditCardPurchase::orderBy('purchased_at')->get();
+
+        $this->assertSame(
+            [['2026-11-14', 356.63, 1], ['2026-12-14', 1723.92, 11]],
+            $compras->map(fn (CreditCardPurchase $p) => [
+                Carbon::parse($p->purchased_at)->toDateString(),
+                round((float) $p->total_amount, 2),
+                (int) $p->installments,
+            ])->all()
+        );
+
+        // Na projeção: 356,63 na fatura de dezembro e 156,72 a partir de janeiro.
+        $projection = app(ProjectionService::class);
+        $this->assertEquals(356.63, $projection->cardExpensesForMonth(now()->setDate(2026, 12, 1))->sum('amount'));
+        $this->assertEquals(156.72, round($projection->cardExpensesForMonth(now()->setDate(2027, 1, 1))->sum('amount'), 2));
+    }
+
+    private function installment(string $id, float $amount, string $purchaseDate, string $appearedAt, int $number, int $total): array
+    {
+        return [
+            'id' => $id,
+            'date' => $appearedAt.'T12:00:00.000Z',
+            'createdAt' => $appearedAt.'T12:00:00.000Z',
+            'amount' => $amount,
+            'description' => 'PORTO SEGURO AUTO',
+            'creditCardMetadata' => [
+                'purchaseDate' => $purchaseDate.'T12:00:00.000Z',
+                'installmentNumber' => $number,
+                'totalInstallments' => $total,
+            ],
+        ];
+    }
+
     private function import(array $options = []): void
     {
         $this->artisan('import:pluggy-caixa-card', $options + ['--all' => true, '--purchased-from' => '2025-01-01'])->assertSuccessful();

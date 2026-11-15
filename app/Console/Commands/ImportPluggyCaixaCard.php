@@ -166,8 +166,8 @@ class ImportPluggyCaixaCard extends Command
      */
     private function purchasesFrom(array $transactions, Carbon $from, Carbon $to, Collection $recorrentes): Collection
     {
-        return collect($transactions)
-            ->filter(function (array $t) use ($from, $to, $recorrentes) {
+        $lines = collect($transactions)
+            ->filter(function (array $t) use ($recorrentes) {
                 if ((float) $t['amount'] <= 0) {
                     return false; // estorno ou ajuste de crédito
                 }
@@ -182,25 +182,122 @@ class ImportPluggyCaixaCard extends Command
                     return false;
                 }
 
-                if (! $this->purchaseDate($t)) {
-                    return false;
-                }
-
-                // A janela é sobre quando o Pluggy registrou o lançamento.
-                $apareceuEm = Carbon::parse($t['createdAt'] ?? $t['date']);
-
-                return $apareceuEm->betweenIncluded($from, $to);
+                return $this->purchaseDate($t) !== null;
             })
             ->map(fn (array $t) => [
                 'description' => $t['description'],
                 'purchased_at' => $this->purchaseDate($t)->toDateString(),
                 'installments' => max(1, (int) ($t['creditCardMetadata']['totalInstallments'] ?? 1)),
                 'installment_amount' => round((float) $t['amount'], 2),
-            ])
+                'installment_number' => isset($t['creditCardMetadata']['installmentNumber'])
+                    ? (int) $t['creditCardMetadata']['installmentNumber']
+                    : null,
+                // A janela é sobre quando o Pluggy registrou o lançamento.
+                'in_window' => Carbon::parse($t['createdAt'] ?? $t['date'])->betweenIncluded($from, $to),
+            ]);
+
+        // A divisão olha o histórico inteiro, não só a janela: na execução diária
+        // a 2ª parcela chega um mês depois da 1ª, e só as duas juntas mostram que
+        // os valores são diferentes.
+        return $this->splitIrregularFirstInstallment($lines)
+            ->filter(fn (array $p) => $p['in_window'])
             // Parcelas da mesma compra viram uma linha só.
             ->unique(fn (array $p) => $this->key($p['purchased_at'], $p['installment_amount'], $p['installments']))
             ->sortBy('purchased_at')
             ->values();
+    }
+
+    /**
+     * Parcelamento com a 1ª parcela de valor diferente das demais (seguro com
+     * entrada maior, por exemplo). A compra só guarda parcelas iguais, então
+     * vira duas: a 1ª parcela sozinha, na data da compra, e as N-1 restantes com
+     * data um mês depois, para começarem na fatura seguinte. Sem isso, cada valor
+     * viraria uma compra de N parcelas e o gasto seria contado quase em dobro.
+     *
+     * Só divide quando os números das parcelas confirmam o padrão: a nº 1 com um
+     * valor e todas as de nº 2 em diante com outro, o mesmo entre elas.
+     */
+    private function splitIrregularFirstInstallment(Collection $lines): Collection
+    {
+        return $lines
+            ->groupBy(fn (array $p) => $p['purchased_at'].'|'.$p['installments'].'|'.$p['description'])
+            ->flatMap(function (Collection $group) {
+                $n = $group->first()['installments'];
+
+                if ($n < 2 || $group->contains(fn (array $p) => $p['installment_number'] === null)) {
+                    return $group;
+                }
+
+                $first = $group->firstWhere('installment_number', 1);
+                $rest = $group->filter(fn (array $p) => $p['installment_number'] >= 2);
+
+                if ($first === null || $rest->isEmpty()) {
+                    return $group;
+                }
+
+                $regular = $rest->first()['installment_amount'];
+
+                if ($rest->contains(fn (array $p) => abs($p['installment_amount'] - $regular) >= 0.01)
+                    || abs($first['installment_amount'] - $regular) < 0.01) {
+                    return $group;
+                }
+
+                $date = $first['purchased_at'];
+                $inWindow = $group->contains(fn (array $p) => $p['in_window']);
+
+                return [
+                    [
+                        'description' => $first['description'],
+                        'purchased_at' => $date,
+                        'installments' => 1,
+                        'installment_amount' => $first['installment_amount'],
+                        'installment_number' => 1,
+                        'in_window' => $inWindow,
+                        // Importada antes como N parcelas iguais à 1ª.
+                        'replaces' => $this->key($date, $first['installment_amount'], $n),
+                    ],
+                    [
+                        'description' => $first['description'],
+                        'purchased_at' => Carbon::parse($date)->addMonthNoOverflow()->toDateString(),
+                        'installments' => $n - 1,
+                        'installment_amount' => $regular,
+                        'installment_number' => null,
+                        'in_window' => $inWindow,
+                        // Importada antes como N parcelas iguais às demais.
+                        'replaces' => $this->key($date, $regular, $n),
+                    ],
+                ];
+            })
+            ->values();
+    }
+
+    /**
+     * Já está no banco: com a mesma chave, ou, para uma parcela avulsa de um
+     * parcelamento, na forma dividida acima — quando a fatura ainda só trouxe
+     * a 1ª parcela, ou só as seguintes, e a divisão foi lançada antes.
+     */
+    private function alreadyStored(array $p, Collection $existentes, Collection $cadastradas): bool
+    {
+        if ($existentes->has($this->key($p['purchased_at'], $p['installment_amount'], $p['installments']))) {
+            return true;
+        }
+
+        $n = $p['installments'];
+        $number = $p['installment_number'] ?? null;
+
+        if ($n < 2 || $number === null) {
+            return false;
+        }
+
+        $restDate = Carbon::parse($p['purchased_at'])->addMonthNoOverflow()->toDateString();
+        $hasRest = $cadastradas->contains(fn (CreditCardPurchase $c) => (int) $c->installments === $n - 1
+            && Carbon::parse($c->purchased_at)->toDateString() === $restDate);
+
+        if ($number === 1) {
+            return $hasRest && $existentes->has($this->key($p['purchased_at'], $p['installment_amount'], 1));
+        }
+
+        return $existentes->has($this->key($restDate, $p['installment_amount'], $n - 1));
     }
 
     /**
@@ -269,6 +366,7 @@ class ImportPluggyCaixaCard extends Command
 
         $chavesDaApi = $purchases
             ->map(fn (array $p) => $this->key($p['purchased_at'], $p['installment_amount'], $p['installments']))
+            ->merge($purchases->pluck('replaces')->filter())
             ->flip();
 
         $manuais = $cadastradas
@@ -277,7 +375,10 @@ class ImportPluggyCaixaCard extends Command
                 || $chavesDaApi->has($this->storedKey($p)))
             ->keyBy('id');
 
-        $pares = $this->pairManuals($purchases, $manuais, $existentes);
+        // Compra importada antes sem a divisão da 1ª parcela, que agora é corrigida.
+        $porChave = $cadastradas->keyBy(fn (CreditCardPurchase $p) => $this->storedKey($p));
+
+        $pares = $this->pairManuals($purchases, $manuais, $existentes, $cadastradas);
 
         $criadas = 0;
         $ignoradas = 0;
@@ -286,7 +387,7 @@ class ImportPluggyCaixaCard extends Command
         foreach ($purchases as $index => $p) {
             $chave = $this->key($p['purchased_at'], $p['installment_amount'], $p['installments']);
 
-            if ($existentes->has($chave)) {
+            if ($this->alreadyStored($p, $existentes, $cadastradas)) {
                 $ignoradas++;
                 $this->line(sprintf('  = %s  %10s  %dx  %s',
                     $p['purchased_at'],
@@ -299,6 +400,33 @@ class ImportPluggyCaixaCard extends Command
             }
 
             $total = round($p['installment_amount'] * $p['installments'], 2);
+
+            $anterior = isset($p['replaces']) ? $porChave->pull($p['replaces']) : null;
+
+            if ($anterior !== null) {
+                $existentes->put($chave, true);
+                $corrigidas++;
+
+                $this->line(sprintf('  <comment>~</comment> %s %s %dx  →  %s %s %dx  (1ª parcela diferente)  %s',
+                    Carbon::parse($anterior->purchased_at)->format('d/m'),
+                    number_format((float) $anterior->total_amount, 2, ',', '.'),
+                    $anterior->installments,
+                    Carbon::parse($p['purchased_at'])->format('d/m'),
+                    number_format($total, 2, ',', '.'),
+                    $p['installments'],
+                    mb_strimwidth($p['description'], 0, 28, '…')
+                ));
+
+                if (! $dryRun) {
+                    $anterior->update([
+                        'total_amount' => $total,
+                        'installments' => $p['installments'],
+                        'purchased_at' => $p['purchased_at'],
+                    ]);
+                }
+
+                continue;
+            }
 
             $manual = $pares->get($index);
 
@@ -366,16 +494,17 @@ class ImportPluggyCaixaCard extends Command
      *
      * @return Collection<int, CreditCardPurchase> chaveada pelo índice da compra da API
      */
-    private function pairManuals(Collection $purchases, Collection $manuais, Collection $existentes): Collection
+    private function pairManuals(Collection $purchases, Collection $manuais, Collection $existentes, Collection $cadastradas): Collection
     {
         $pares = collect();
         $disponiveis = $manuais;
+        $chavesCadastradas = $cadastradas->map(fn (CreditCardPurchase $p) => $this->storedKey($p))->flip();
 
         foreach ([true, false] as $soConfirmados) {
             foreach ($purchases as $index => $p) {
-                $chave = $this->key($p['purchased_at'], $p['installment_amount'], $p['installments']);
-
-                if ($pares->has($index) || $existentes->has($chave)) {
+                if ($pares->has($index)
+                    || $this->alreadyStored($p, $existentes, $cadastradas)
+                    || (isset($p['replaces']) && $chavesCadastradas->has($p['replaces']))) {
                     continue;
                 }
 
